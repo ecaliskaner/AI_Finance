@@ -196,6 +196,12 @@ Build the ability to ask questions before trying to answer them.
 **Gate:** you can reload 5+ years of clean minute bars reproducibly, and the
 data quality report is empty or explained.
 
+> **Status: done.** Implemented in `ai_finance/data/`, 116 tests passing. Gate
+> verified against 2,628,001 bars spanning five years: 100% coverage, zero
+> quality errors, byte-identical on re-run, and a no-op second fetch. The real
+> Binance backfill must be run from a network that allows `api.binance.com` —
+> see the note in the README.
+
 ### Phase 1 — Backtest engine with honest costs (weeks 2–4)
 
 The most important code in the project. If this is wrong, everything downstream

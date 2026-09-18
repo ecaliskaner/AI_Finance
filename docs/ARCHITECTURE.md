@@ -116,13 +116,16 @@ component that can fail at 3am while holding a position.
 @dataclass(frozen=True)
 class Signal:
     """What the strategy wants. Not yet an order."""
+
     symbol: str
-    target_weight: float      # -1.0 to 1.0, fraction of equity
-    confidence: float         # drives sizing in the risk layer
-    reason: str               # human-readable, logged on every signal
+    target_weight: float  # -1.0 to 1.0, fraction of equity
+    confidence: float  # drives sizing in the risk layer
+    reason: str  # human-readable, logged on every signal
+
 
 class Strategy(Protocol):
     def on_bar(self, state: MarketState) -> Signal | None: ...
+
 
 class ExecutionAdapter(Protocol):
     def submit(self, order: Order) -> Fill | None: ...

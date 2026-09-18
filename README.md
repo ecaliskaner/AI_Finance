@@ -3,17 +3,48 @@
 An automated crypto trading system, built to be evaluated honestly before it is
 ever trusted with real money.
 
-**Current status: planning. No code yet. No capital at risk.**
+**Current status: Phase 0 complete — data pipeline built and verified. No
+capital at risk.**
 
 The system trades mock money by default. Real capital requires an explicit flag
 and credentials that don't exist yet.
 
 ## What this is
 
-A 24/7 algorithmic trading system for crypto (Binance first), with a research
+An algorithmic trading system for crypto (Binance first), with a research
 pipeline for finding and validating signals, and a hard risk layer that can
 veto or halt trading. US equities are a possible later extension, not the
 starting point.
+
+## Quickstart
+
+```bash
+uv venv && uv pip install -e ".[dev]"
+
+# Offline: generate deterministic fake bars and exercise the whole pipeline.
+aifin fetch --source synthetic --symbol SYNTH --start 2024-01-01 --end 2024-06-30
+aifin quality --symbol SYNTH
+aifin show --symbol SYNTH --interval 4h --tail 5
+
+# Real data. Safe to re-run: idempotent, and resumes from the last stored bar.
+aifin fetch --symbol BTCUSDT --symbol ETHUSDT --start 2017-08-17
+aifin quality --symbol BTCUSDT --symbol ETHUSDT
+aifin info
+
+pytest && ruff check .
+```
+
+Only 1-minute bars are ever stored. Coarser intervals are derived on read, so
+there is one source of truth on disk and no way for two stored intervals to
+disagree.
+
+> **Note on fetching real data.** `aifin fetch` needs outbound access to
+> `api.binance.com`. Some networks — including Anthropic's sandboxed session
+> environment, where this was built — block it by policy, and Binance itself
+> geo-blocks some regions. The pipeline is fully unit-tested against an
+> injectable HTTP transport and exercised end to end with `--source synthetic`,
+> so run the real backfill from a machine with access (your laptop, or the VPS
+> from Phase 4) and it will work unchanged.
 
 ## What this is not (yet)
 
@@ -49,6 +80,19 @@ Trading frequency is a budget you spend, not a feature you add. The system is
 designed around that constraint from day one — which is also why it runs as a
 scheduled job a few times a day rather than a 24/7 service.
 
+## Where things stand
+
+| Phase | Status |
+|---|---|
+| 0 — Foundations and data | **Done.** 116 tests. Gate verified: 2,628,001 bars over 5 years, 100% coverage, zero quality errors, reproducible and idempotent. |
+| 1 — Backtest engine with honest costs | Next |
+| 2 — Baselines and validation framework | |
+| 3 — Features and supervised models | |
+| 4 — Live paper trading | |
+| 5 — Small real capital | |
+
 ## Start here
 
-Read [`docs/PLAN.md`](docs/PLAN.md). Phase 0 is the next piece of work.
+Read [`docs/PLAN.md`](docs/PLAN.md). Phase 1 is the next piece of work: an
+event-driven backtest engine whose gate is reproducing buy-and-hold to within a
+few basis points.
