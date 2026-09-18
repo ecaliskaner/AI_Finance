@@ -1,0 +1,33 @@
+# Secrets — never commit. See docs/RISK.md §4.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets/
+
+# Data — large, regenerable, never versioned
+data/
+*.parquet
+*.duckdb
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Research output
+runs/
+artifacts/
+*.log
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
