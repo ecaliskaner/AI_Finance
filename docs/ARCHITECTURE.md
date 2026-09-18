@@ -34,6 +34,10 @@ The risk engine sits between strategy and execution in all three modes,
 including backtest. A strategy that would be blocked live must also be blocked
 in the backtest, or the backtest is measuring a strategy you will never run.
 
+**`paper` is the default mode.** `live` requires an explicit flag and separate
+credentials, and `execution/live.py` is the last module written — so before
+Phase 5 there is no code path to a real order at all. See PLAN.md §2.
+
 ## Data flow
 
 ```
@@ -79,7 +83,7 @@ ai_finance/
 │   ├── walkforward.py    # rolling fit/test splits, purge + embargo
 │   └── registry.py       # experiment log — every run recorded
 └── ops/
-    ├── state.py          # crash-safe persistence of positions and orders
+    ├── state.py          # run log + last-known positions (cache; exchange is authority)
     ├── alerts.py         # Telegram notifications, kill switch listener
     └── monitor.py        # health checks, daily P&L summary
 ```
@@ -94,17 +98,17 @@ ai_finance/
 | Data | `pandas` + `pyarrow` | pandas for familiarity; Parquet for compact columnar storage |
 | Storage | Parquet files, partitioned by symbol/month | No database to run; DuckDB can query the files directly if needed |
 | Backtest | **Custom, ~300 lines** | Vectorized libraries (vectorbt, backtrader) make look-ahead bias easy and invisible. Writing the loop yourself is the single best way to actually understand what a backtest claims |
-| ML | `scikit-learn` → `lightgbm` | Linear first for interpretability, then gradient boosting. No deep learning — see PLAN §3 |
+| ML | `scikit-learn` → `lightgbm` | Linear first for interpretability, then gradient boosting. No deep learning — see PLAN.md Phase 3 |
 | Validation | Custom walk-forward | `sklearn`'s standard CV leaks across time and will flatter every model |
-| Scheduling | `asyncio` event loop | One process, WebSocket-driven, no cron |
+| Scheduling | `cron` or a systemd timer | A 4-hour-horizon strategy needs no persistent process. Each run is short-lived and stateless, which is far less to get wrong than an always-on async service |
 | Deploy | Docker on a small VPS | Reproducible, restartable, ~$5–10/month |
 | Alerts | Telegram bot | Free, reliable, works from a phone, and supports the kill switch |
 | Logs | `structlog` → JSON lines | Machine-readable, so post-mortems are greppable |
 
 Deliberately excluded for now: Kubernetes, message queues, a web dashboard, a
-database server, microservices. One Python process on one VPS handles this
-workload. Every component added is a component that can fail at 3am while
-holding a position.
+database server, microservices, WebSocket streaming, async. A short-lived Python
+process on one small VPS handles this workload. Every component added is a
+component that can fail at 3am while holding a position.
 
 ## Key interfaces
 
@@ -135,14 +139,22 @@ explainable after the fact, including at Phase 6 if an RL policy is ever added.
 
 ## Operational requirements (from Phase 4)
 
-- **Crash-safe state.** The process can be killed at any moment and restart
-  knowing its true position. Reconcile against the exchange on every startup,
-  and trust the exchange over local state.
+Short because the system is a scheduled job rather than a persistent service.
+Most of what would otherwise be on this list is handled by the process simply
+not existing between runs.
+
+- **The exchange is the source of truth.** Every run begins by reading actual
+  positions from the exchange. Local state is a cache, never an authority. This
+  dissolves most of the crash-recovery problem: a process that died mid-run just
+  leaves the next run some reconciling to do.
 - **Idempotent orders.** Client order IDs prevent a retry after a network
   timeout from becoming a duplicate position.
-- **Heartbeat.** If no bar arrives for N minutes, alert. Silent failure while
-  holding a position is the worst failure mode.
+- **Missed-run detection.** The dangerous failure here is a scheduled run that
+  silently didn't happen. Each run writes a heartbeat; a separate check alerts if
+  the newest one is older than the cadence allows.
 - **Kill switch.** A Telegram command that flattens all positions and halts
   trading, reachable from a phone, tested regularly.
 - **Daily reconciliation.** Compare what the backtest would have done on the same
   bars against what actually happened. Every mismatch gets investigated.
+- **Mode is always explicit.** `backtest` | `paper` | `live`, defaulting to
+  `paper`.

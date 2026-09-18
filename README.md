@@ -5,6 +5,9 @@ ever trusted with real money.
 
 **Current status: planning. No code yet. No capital at risk.**
 
+The system trades mock money by default. Real capital requires an explicit flag
+and credentials that don't exist yet.
+
 ## What this is
 
 A 24/7 algorithmic trading system for crypto (Binance first), with a research
@@ -14,13 +17,13 @@ starting point.
 
 ## What this is not (yet)
 
-- Not a minute-by-minute trading bot. See [`docs/PLAN.md`](docs/PLAN.md) §1 for
-  why trading every minute at this account size is arithmetically guaranteed to
-  lose money.
+- Not a minute-by-minute trading bot, by design. Decisions are made on a
+  4-hour-to-daily horizon. See [`docs/PLAN.md`](docs/PLAN.md) §1 for the cost
+  arithmetic that settles this, and §1.5 for how much engineering it saves.
 - Not a reinforcement-learning agent. RL is deferred to Phase 6, for reasons in
-  [`docs/PLAN.md`](docs/PLAN.md) §7.
-- Not connected to a live account. Live keys arrive at Phase 5, after a paper
-  track record.
+  [`docs/PLAN.md`](docs/PLAN.md) §8.
+- Not connected to a live account. Live keys arrive at Phase 5, after 60+ days
+  of paper trading. See [`docs/PLAN.md`](docs/PLAN.md) §2.
 
 ## Documents
 
@@ -43,7 +46,8 @@ round-trip trade costs 0.2% of the traded notional.**
 | 0.3 (~2/week) | ~21% |
 
 Trading frequency is a budget you spend, not a feature you add. The system is
-designed around that constraint from day one.
+designed around that constraint from day one — which is also why it runs as a
+scheduled job a few times a day rather than a 24/7 service.
 
 ## Start here
 

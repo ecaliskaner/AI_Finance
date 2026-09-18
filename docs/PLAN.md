@@ -1,10 +1,14 @@
 # AI_Finance — Project Plan
 
-**Goal:** an AI system that manages capital autonomously, 24/7, in crypto
-markets (Binance first), extending to US equities later.
+**Goal:** an AI system that manages capital autonomously and makes money, in
+crypto markets (Binance first), extending to US equities later.
 
-**Constraints as stated:** ~$5,000 maximum capital at risk, comfortable with
-some coding, new to Python and ML.
+**Constraints:** ~$5,000 maximum capital at risk, comfortable with some coding,
+new to Python and ML.
+
+**Explicitly not requirements** (clarified by the owner): 1-minute trading and
+24/7 operation. They were means, not ends. The end is profit, and the system
+must earn trust on mock money before any real capital is committed.
 
 This document is deliberately blunt about what will and will not work at this
 account size. The plan is designed so that the first six months produce a real
@@ -72,24 +76,104 @@ break even. This is why the overwhelming majority of retail high-frequency bots
 lose money: not because the signal is wrong, but because the fee schedule is a
 tax on activity and they pay it hundreds of times.
 
-### 1.4 The reframe
+### 1.4 What this means for the design
 
-The goal doesn't change. The mechanism does.
+Since 1-minute trading and 24/7 operation are not requirements, the design can
+follow the arithmetic instead of fighting it.
 
-| You asked for | What we build instead | Why |
+| Original idea | What we build | Why |
 |---|---|---|
-| Buy and sell on a 1-minute spectrum | **Evaluate** every minute, **trade** on 1h–24h horizons | Minute-level awareness is free; minute-level trading is not |
-| Reward the machine each time it gains money (RL) | Supervised prediction + an explicit, cost-aware position rule | RL needs millions of samples; you have ~500k minute bars, and they're non-stationary. See §7 |
+| Buy and sell on a 1-minute spectrum | Decide on a **4-hour to daily** horizon | Round-trip cost drops from 2.9σ of the move to under 0.2σ. The same signal quality that loses money at 1 minute makes money at 4 hours |
+| Run 24/7 | A **scheduled job** waking a few times a day | The biggest simplification available here — see §1.5 |
+| Reward the machine each time it gains money (RL) | Supervised prediction + an explicit, cost-aware position rule | RL needs millions of samples; you have ~500k minute bars, and they're non-stationary. See §8 |
 | Analyze news with AI | LLM layer as a **context and veto** signal, not a trade trigger | News is priced in seconds. You cannot beat that; you can use it to size down and stay out of trouble |
-| Run 24/7 | Yes, genuinely — this part is fully achievable in crypto | Crypto never closes, and the exchange APIs are built for it |
+| — | **Mock money by default**, live behind an explicit gate | See §2 |
+
+Nothing about the goal changes. Only the timescale — and the timescale was the
+thing making the goal unreachable.
 
 **Trading frequency is a budget.** Every phase below reports its fee drag
 alongside its returns. A strategy that doesn't beat buy-and-hold BTC *after
 costs* is not a strategy.
 
+### 1.5 What dropping 1-minute and 24/7 actually saves
+
+Worth stating plainly, because it is the largest cost reduction in the project
+and it isn't a financial one.
+
+A system that trades every minute, continuously, needs persistent WebSocket
+feeds with reconnect logic, an async event loop, a crash-safe state machine that
+can resume mid-position, sub-second order lifecycle handling, a dead man's
+switch at minute granularity, and real 24/7 uptime monitoring. That is the hard
+two thirds of the engineering. It is the part most likely to fail at 3am while
+holding a position, and it is genuinely difficult to write correctly while also
+learning Python.
+
+A system that decides every 4 hours needs a scheduled job that wakes up, fetches
+recent bars, computes features, asks the model, places at most a few orders, and
+exits. If it crashes, the next run picks up from the exchange's own record of
+your position. There is no mid-position state to corrupt, because the process
+isn't running most of the time.
+
+Same strategy, same research pipeline, same expected returns — roughly a third
+of the code, and the third that's removed is the dangerous third.
+
 ---
 
-## 2. Phase plan
+## 2. Operating principle: mock money by default
+
+The system has to prove itself before it is believed. That is not just Phase 4;
+it is a property built into the software.
+
+### 2.1 Live trading is opt-in, not a setting you can forget
+
+- Execution mode is explicit on every run: `backtest`, `paper`, or `live`.
+- **`paper` is the default.** Running the system with no mode specified trades
+  fake money.
+- `live` requires an explicit flag *and* a separate set of API credentials that
+  do not exist on disk until Phase 5.
+- The live adapter is the **last** module written, not the first. Until then
+  there is no code path to a real order at all — a stronger guarantee than any
+  configuration check.
+
+### 2.2 Two kinds of mock money, and they catch different lies
+
+These get treated as one thing. They aren't, and skipping the second is where
+backtested strategies go to die.
+
+| | **Backtest** | **Paper trading** |
+|---|---|---|
+| Data | Historical, replayed fast | Live, in real time |
+| Speed | 5 years in seconds | 5 years takes 5 years |
+| Catches | Bad strategy logic, cost blindness, regime fragility | Look-ahead bias, data feed gaps, wrong fill assumptions, crashes, API errors |
+| Blind to | Fills, latency, live data quality, everything operational | Almost nothing — this is the honest one |
+
+A backtest tells you whether the *idea* is any good. Paper trading tells you
+whether the *system* is any good. Both are needed, in that order, and a strategy
+that survives the first but not the second is the common case rather than the
+exception.
+
+### 2.3 What "believing it" should require
+
+Promotion from paper to real money is a checklist, not a feeling. The full list
+is [`RISK.md`](RISK.md) §8; its core:
+
+- 60+ consecutive days of paper trading
+- Live results inside the backtest's confidence interval — **not** better.
+  Dramatically better means something is wrong, and finding out what is cheaper
+  now than later
+- Zero unexplained divergences between what the backtest would have done and
+  what paper actually did
+- Every hard risk limit tested by deliberately triggering it
+- First real capital is $200–500, not $5,000
+
+And the criterion that matters most: **you can explain why it makes money.** A
+system that is profitable in paper for reasons you cannot articulate will
+surprise you eventually, and the surprise will not be in your favour.
+
+---
+
+## 3. Phase plan
 
 Each phase has a concrete deliverable and a **gate** — a measurable criterion
 that must be met before moving on. The gates are the point. They are what stop
@@ -179,18 +263,22 @@ edge — go back and lengthen the horizon.
 The same code path as live, with fake money. This is where most backtested
 strategies quietly die, and it is much better to find that out here.
 
-- Binance testnet or a live-data/simulated-fill harness, running 24/7 on a small
-  VPS.
+- A **scheduled job** (cron or a systemd timer) firing on the strategy's cadence
+  — every 4 hours to start. It fetches recent bars, runs the strategy, places
+  orders, and exits. No persistent process, no WebSocket feed.
 - **Identical strategy code** to the backtest. Only the execution adapter
   differs. If backtest and paper diverge, that divergence is a bug report about
   your cost model, and it is valuable.
-- Full operational stack: state persistence across restarts, structured logs,
-  Telegram alerts, a daily P&L summary, and a kill switch.
+- Position state read from the exchange at the start of every run, never trusted
+  from local memory. This removes an entire category of bug, and it is only
+  affordable because the runs are infrequent.
+- Operational stack, now much smaller: structured logs, Telegram alerts, a daily
+  P&L summary, and a kill switch.
 - Reconciliation: every day, compare what the backtest *would have done* on the
   same bars to what paper trading actually did. Investigate every mismatch.
 
 **Gate:** **60 consecutive days** of paper trading with no unexplained
-divergence from backtest expectations, no crashes that lose state, and
+divergence from backtest expectations, no scheduled run silently missed, and
 performance within the backtest's confidence interval. Sixty days is short for
 statistical significance but long enough to expose operational failures, which
 are the ones that actually cost money.
@@ -203,6 +291,9 @@ are the ones that actually cost money.
   loss, max drawdown auto-halt. See [`RISK.md`](RISK.md).
 - API keys: **trade permission only, withdrawal permanently disabled, IP
   whitelisted.** Non-negotiable.
+- **Keep the paper instance running in parallel.** It is your control group:
+  when live underperforms paper, the gap is execution cost, and you want it
+  measured rather than guessed at.
 - Scale up only on evidence: a defined ladder tied to live track record, not to
   how confident you feel after a good week.
 
@@ -213,17 +304,20 @@ consider increasing capital.
 
 Only after Phase 5 is stable. Each is a project in itself:
 
-- **News / LLM layer** (§6)
-- **Reinforcement learning** (§7)
-- **US equities** — needs a different execution adapter (Alpaca or IBKR), and
-  note that under $25,000 US brokers restrict you to 3 day trades per 5 business
-  days. At your stated capital this makes equities a *swing trading* venue with
-  multi-day holds, not an intraday one. The research pipeline transfers; the
-  execution assumptions do not.
+- **News / LLM layer** (§7)
+- **Reinforcement learning** (§8)
+- **US equities** — a better fit than they first looked. With 24/7 operation off
+  the requirements list, a daily-horizon strategy doesn't care that the market
+  closes overnight, and the PDT rule stops binding: it counts positions opened
+  *and closed* in the same session, so overnight holds aren't day trades. Note
+  this does constrain the horizon — a 4-hour intraday round trip still counts as
+  a day trade, so equities means holding at least overnight. Needs a different
+  execution adapter (Alpaca or IBKR). The research pipeline transfers intact;
+  only the execution assumptions change.
 
 ---
 
-## 3. Data strategy
+## 4. Data strategy
 
 | Data | Source | Cost | Phase |
 |---|---|---|---|
@@ -239,7 +333,7 @@ and you will — this is what lets you rebuild everything correctly.
 
 ---
 
-## 4. Validation methodology
+## 5. Validation methodology
 
 This section is the difference between a system that works and one that only
 appears to.
@@ -263,7 +357,7 @@ appears to.
 
 ---
 
-## 5. Common failure modes
+## 6. Common failure modes
 
 Checked explicitly at each gate:
 
@@ -285,7 +379,7 @@ Checked explicitly at each gate:
 
 ---
 
-## 6. The news / LLM layer (Phase 6)
+## 7. The news / LLM layer (Phase 6)
 
 Worth doing, but not as the trade trigger.
 
@@ -312,7 +406,7 @@ other feature. If it doesn't improve out-of-sample results, it doesn't ship.
 
 ---
 
-## 7. Why reinforcement learning is deferred
+## 8. Why reinforcement learning is deferred
 
 Your instinct — reward the machine when it makes money — is exactly how RL
 works, and it's the right intuition. It is also, in finance specifically, where
@@ -346,7 +440,7 @@ supervised as the champion to beat. Not the other way around.
 
 ---
 
-## 8. Effort and timeline
+## 9. Effort and timeline
 
 Assuming part-time work and that Python and ML are being learned alongside:
 
@@ -358,6 +452,10 @@ Assuming part-time work and that Python and ML are being learned alongside:
 | 3 | 4 weeks | Feature engineering and resisting overfitting |
 | 4 | 6–8 weeks | Mostly waiting, deliberately |
 | 5 | 12 weeks | Mostly waiting, deliberately |
+
+The build effort in Phases 0–4 is meaningfully smaller than it would be for a
+continuous minute-level system (§1.5); the calendar is dominated by deliberate
+waiting, not by coding.
 
 **Roughly six months before real money, most of it spent waiting on purpose.**
 That waiting is not wasted time; it is the experiment running. Compressing it is
@@ -375,7 +473,7 @@ would ever be safe to scale.
 
 ---
 
-## 9. Open items
+## 10. Open items
 
 1. **Exchange account** — Binance availability and KYC vary by jurisdiction.
    Confirm what you can actually open before Phase 0 finishes, since it
@@ -384,13 +482,15 @@ would ever be safe to scale.
    generates thousands of them. Check how your jurisdiction treats crypto
    trading gains and what reporting is required; it may influence target holding
    periods. Worth a conversation with an accountant before Phase 5, not after.
-3. **Hosting** — a $5–10/month VPS is sufficient. Needed by Phase 4.
+3. **Hosting** — a $5–10/month VPS is more than sufficient for a job that runs a
+   few times a day. Needed by Phase 4. An always-on home machine would also work
+   for paper trading, though a VPS is worth it before live.
 4. **Capital ladder** — define the specific rule for scaling from $500 upward
    before going live, so the decision isn't made mid-winning-streak.
 
 ---
 
-## 10. Next step
+## 11. Next step
 
 **Phase 0.** Project scaffolding, the Binance data pipeline, and the data
 quality report. Nothing here touches an exchange account or requires a key with

@@ -39,8 +39,10 @@ large enough to erase a small edge.
 date. Where most crypto leverage lives. Not used in this project's early phases.
 
 **PDT (Pattern Day Trader) rule** — a US regulation: with under $25,000 in a
-margin account you're limited to 3 day trades per 5 business days. Does not
-apply to crypto; blocks intraday equity trading entirely at this account size.
+margin account you're limited to 3 day trades per 5 business days. A *day trade*
+is a position opened and closed in the same session, so overnight holds don't
+count. Does not apply to crypto. For equities at this account size it rules out
+intraday trading but leaves multi-day holds open.
 
 ## Strategy and performance
 
@@ -84,7 +86,7 @@ Phase 3.
 
 **Reinforcement learning (RL)** — learning from rewards rather than labels. The
 agent acts, receives feedback, and adjusts. Intuitive for trading, and deferred
-to Phase 6 for the reasons in PLAN §7.
+to Phase 6 for the reasons in PLAN §8.
 
 **Feature** — an input to the model. "Return over the last hour" is a feature.
 
@@ -133,7 +135,9 @@ harder to accidentally cheat in.
 **Vectorized backtest** — computing all signals at once over an entire array.
 Fast, and makes look-ahead bias nearly invisible. Avoided here.
 
-**Paper trading** — running against live market data with simulated money.
+**Paper trading** — running against live market data, in real time, with
+simulated money. Distinct from a backtest, which replays history fast. They
+catch different failures; see PLAN §2.2.
 
 **Idempotent** — an operation that produces the same result if repeated. Matters
 for order submission: a retry after a network timeout must not become a second
