@@ -226,3 +226,49 @@ class TestStoreSummary:
         assert summary.loc["BTCUSDT", "bars"] == 10
         assert summary.loc["ETHUSDT", "bars"] == 20
         assert summary.loc["BTCUSDT", "first"] == pd.Timestamp("2024-01-01", tz="UTC")
+
+
+class TestDailyResample:
+    """Daily bars use a calendar offset, which pandas treats differently."""
+
+    def test_daily_buckets_start_at_midnight_utc(self):
+        bars = bars_frame("2024-03-01", 3 * 1440)
+        out = resample_bars(bars, "1d")
+
+        assert list(out["open_time"]) == [
+            pd.Timestamp("2024-03-01", tz="UTC"),
+            pd.Timestamp("2024-03-02", tz="UTC"),
+            pd.Timestamp("2024-03-03", tz="UTC"),
+        ]
+        assert out["close_time"].iloc[0] == pd.Timestamp("2024-03-01 23:59:59.999", tz="UTC")
+
+    def test_daily_resample_emits_no_warnings(self):
+        """pandas warns if asked to anchor a calendar offset to the epoch."""
+        import warnings
+
+        bars = bars_frame("2024-03-01", 2880)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            resample_bars(bars, "1d")
+
+    def test_daily_aggregation_is_correct(self):
+        bars = bars_frame("2024-03-01", 1440)
+        out = resample_bars(bars, "1d")
+
+        assert len(out) == 1
+        assert out["open"].iloc[0] == bars["open"].iloc[0]
+        assert out["close"].iloc[0] == bars["close"].iloc[-1]
+        assert out["high"].iloc[0] == bars["high"].max()
+        assert out["volume"].iloc[0] == pytest.approx(bars["volume"].sum())
+
+    def test_partial_day_is_dropped(self):
+        bars = bars_frame("2024-03-01 06:00", 1440)  # 06:00 .. next 05:59
+        assert resample_bars(bars, "1d").empty
+
+    def test_twelve_hour_buckets_still_anchor_to_the_epoch(self):
+        bars = bars_frame("2024-03-01", 1440)
+        out = resample_bars(bars, "12h")
+        assert list(out["open_time"]) == [
+            pd.Timestamp("2024-03-01 00:00", tz="UTC"),
+            pd.Timestamp("2024-03-01 12:00", tz="UTC"),
+        ]

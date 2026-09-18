@@ -3,8 +3,8 @@
 An automated crypto trading system, built to be evaluated honestly before it is
 ever trusted with real money.
 
-**Current status: Phase 0 complete — data pipeline built and verified. No
-capital at risk.**
+**Current status: Phase 1 complete — data pipeline and backtest engine built
+and verified. No capital at risk.**
 
 The system trades mock money by default. Real capital requires an explicit flag
 and credentials that don't exist yet.
@@ -30,6 +30,13 @@ aifin show --symbol SYNTH --interval 4h --tail 5
 aifin fetch --symbol BTCUSDT --symbol ETHUSDT --start 2017-08-17
 aifin quality --symbol BTCUSDT --symbol ETHUSDT
 aifin info
+
+# Backtest. The benchmark and the cost bill are always printed.
+aifin backtest --symbol SYNTH --interval 4h --strategy buy-and-hold
+
+# The project's central claim, one command each.
+aifin backtest --symbol SYNTH --interval 1m --strategy random
+aifin backtest --symbol SYNTH --interval 1d --strategy random
 
 pytest && ruff check .
 ```
@@ -84,15 +91,15 @@ scheduled job a few times a day rather than a 24/7 service.
 
 | Phase | Status |
 |---|---|
-| 0 — Foundations and data | **Done.** 116 tests. Gate verified: 2,628,001 bars over 5 years, 100% coverage, zero quality errors, reproducible and idempotent. |
-| 1 — Backtest engine with honest costs | Next |
-| 2 — Baselines and validation framework | |
+| 0 — Foundations and data | **Done.** Gate verified: 2,628,001 bars over 5 years, 100% coverage, zero quality errors, reproducible and idempotent. |
+| 1 — Backtest engine with honest costs | **Done.** 237 tests. Gate verified as exact identities, not tolerances: zero-cost buy-and-hold reproduces the price return to `1e-12`, and every cost is explained to the same precision. |
+| 2 — Baselines and validation framework | Next |
 | 3 — Features and supervised models | |
 | 4 — Live paper trading | |
 | 5 — Small real capital | |
 
 ## Start here
 
-Read [`docs/PLAN.md`](docs/PLAN.md). Phase 1 is the next piece of work: an
-event-driven backtest engine whose gate is reproducing buy-and-hold to within a
-few basis points.
+Read [`docs/PLAN.md`](docs/PLAN.md), then §1.6 for the fee-drag table measured
+with the engine in this repo. Phase 2 is next: the classic baselines a strategy
+has to beat, and the walk-forward validation to judge them honestly.

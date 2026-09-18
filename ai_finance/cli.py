@@ -14,13 +14,23 @@ import sys
 import click
 import pandas as pd
 
+from ai_finance.backtest.costs import CostModel
+from ai_finance.backtest.engine import run_backtest
 from ai_finance.config import BASE_INTERVAL, INTERVAL_MS, bars_dir
 from ai_finance.data.fetch import fetch_history
 from ai_finance.data.quality import check_bars
 from ai_finance.data.sources import BinanceSource, SyntheticSource
 from ai_finance.data.store import load_bars, store_summary
+from ai_finance.risk.engine import RiskLimits
+from ai_finance.strategy.baselines import AlwaysFlat, BuyAndHold, RandomStrategy
 
 SOURCES = ("binance", "synthetic")
+
+STRATEGIES = {
+    "buy-and-hold": lambda seed: BuyAndHold(),
+    "always-flat": lambda seed: AlwaysFlat(),
+    "random": lambda seed: RandomStrategy(seed=seed, every_n_bars=1),
+}
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -167,6 +177,95 @@ def show(symbol: str, interval: str, start: str | None, end: str | None, tail: i
         return
     click.echo(f"{symbol} {interval}: {len(bars):,} bars")
     click.echo(bars.tail(tail).to_string(index=False))
+
+
+@main.command()
+@click.option("--symbol", default="BTCUSDT", show_default=True)
+@click.option(
+    "--strategy",
+    "strategy_name",
+    default="buy-and-hold",
+    type=click.Choice(sorted(STRATEGIES)),
+    show_default=True,
+    help="Phase 1 ships reference strategies only; real baselines arrive in Phase 2.",
+)
+@click.option(
+    "--interval",
+    default="4h",
+    type=click.Choice(sorted(INTERVAL_MS)),
+    show_default=True,
+    help="Decision cadence. See PLAN.md section 1 for why this is not 1m.",
+)
+@click.option("--start", default=None, help="UTC.")
+@click.option("--end", default=None, help="UTC.")
+@click.option("--initial-equity", default=10_000.0, show_default=True)
+@click.option("--fee", default=0.001, show_default=True, help="Exchange fee per side.")
+@click.option("--spread-bps", default=0.5, show_default=True, help="Half-spread, basis points.")
+@click.option("--slippage-bps", default=0.5, show_default=True, help="Slippage, basis points.")
+@click.option(
+    "--unconstrained",
+    is_flag=True,
+    help="Disable the risk limits. For engine calibration only \u2014 never for research.",
+)
+@click.option("--liquidate", is_flag=True, help="Close any open position at the final bar.")
+@click.option("--seed", default=0, show_default=True, help="Seed for the random strategy.")
+def backtest(
+    symbol: str,
+    strategy_name: str,
+    interval: str,
+    start: str | None,
+    end: str | None,
+    initial_equity: float,
+    fee: float,
+    spread_bps: float,
+    slippage_bps: float,
+    unconstrained: bool,
+    liquidate: bool,
+    seed: int,
+) -> None:
+    """Replay a strategy over stored bars and report what it would have done.
+
+    The benchmark and the cost bill are always printed. A result without both is
+    not interpretable.
+    """
+    bars = load_bars(symbol, start, end, interval)
+    if len(bars) < 2:
+        raise click.ClickException(
+            f"need at least 2 {interval} bars for {symbol}; found {len(bars)}. "
+            "Run 'aifin fetch' first."
+        )
+
+    report = check_bars(bars, symbol, interval)
+    if not report.is_clean():
+        click.secho(
+            "warning: this series has data quality errors, so the result below is "
+            "built on data you have not vouched for:",
+            fg="yellow",
+            err=True,
+        )
+        for problem in report.errors:
+            click.secho(f"  - {problem}", fg="yellow", err=True)
+        click.echo("")
+
+    costs = CostModel(fee_rate=fee, half_spread_bps=spread_bps, slippage_bps=slippage_bps)
+    limits = RiskLimits.unconstrained() if unconstrained else RiskLimits()
+    if unconstrained:
+        click.secho(
+            "risk limits disabled: this measures the engine, not a strategy you could run.",
+            fg="yellow",
+            err=True,
+        )
+
+    result = run_backtest(
+        bars,
+        STRATEGIES[strategy_name](seed),
+        symbol=symbol,
+        initial_equity=initial_equity,
+        costs=costs,
+        limits=limits,
+        liquidate_at_end=liquidate,
+    )
+    click.echo(result.to_text())
 
 
 if __name__ == "__main__":

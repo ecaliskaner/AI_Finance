@@ -78,6 +78,7 @@ ai_finance/
 ├── backtest/
 │   ├── engine.py         # the event loop
 │   ├── costs.py          # fee + spread + slippage model
+│   ├── ledger.py         # portfolio + trade accounting from cash flows
 │   └── metrics.py        # returns, Sharpe, drawdown, fees paid, vs benchmark
 ├── research/
 │   ├── walkforward.py    # rolling fit/test splits, purge + embargo
@@ -87,6 +88,12 @@ ai_finance/
     ├── alerts.py         # Telegram notifications, kill switch listener
     └── monitor.py        # health checks, daily P&L summary
 ```
+
+Built so far (Phases 0–1): all of `data/`, `strategy/base.py`,
+`strategy/baselines.py`, `risk/engine.py`, `execution/base.py`,
+`execution/backtest.py`, and all of `backtest/`. Still to come: `features/`,
+`strategy/ml.py`, `risk/sizing.py`, `execution/paper.py`, `execution/live.py`,
+`research/`, `ops/`.
 
 ## Tech stack
 

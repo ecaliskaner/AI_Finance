@@ -183,3 +183,129 @@ class TestInfoAndShow:
         result = cli.invoke(main, ["show", "--symbol", "NOPE"])
         assert result.exit_code == 0
         assert "No bars" in result.output
+
+
+class TestBacktestCommand:
+    @pytest.fixture
+    def stored(self, cli, tmp_path):
+        """A day of synthetic 1-minute bars in the store."""
+        cli.invoke(
+            main,
+            [
+                "fetch",
+                "--source",
+                "synthetic",
+                "--symbol",
+                "SYNTH",
+                "--start",
+                "2024-01-01",
+                "--end",
+                "2024-01-31 23:59",
+            ],
+        )
+        return tmp_path
+
+    def test_runs_and_reports_benchmark_and_costs(self, cli, stored):
+        result = cli.invoke(main, ["backtest", "--symbol", "SYNTH", "--interval", "4h"])
+
+        assert result.exit_code == 0, result.output
+        assert "Backtest: buy-and-hold on SYNTH" in result.output
+        assert "benchmark" in result.output
+        assert "total cost" in result.output
+
+    def test_each_reference_strategy_runs(self, cli, stored):
+        for name in ("buy-and-hold", "always-flat", "random"):
+            result = cli.invoke(
+                main, ["backtest", "--symbol", "SYNTH", "--interval", "4h", "--strategy", name]
+            )
+            assert result.exit_code == 0, f"{name}: {result.output}"
+            assert name in result.output
+
+    def test_always_flat_returns_exactly_zero(self, cli, stored):
+        result = cli.invoke(
+            main,
+            ["backtest", "--symbol", "SYNTH", "--interval", "4h", "--strategy", "always-flat"],
+        )
+        assert "return       +0.00%" in result.output
+        assert "total cost   0.00" in result.output
+
+    def test_cost_sensitivity_flags_change_the_result(self, cli, stored):
+        """PLAN section 5: re-run the winner at 30bp and see if the edge survives."""
+        base = cli.invoke(
+            main,
+            [
+                "backtest",
+                "--symbol",
+                "SYNTH",
+                "--interval",
+                "1h",
+                "--strategy",
+                "random",
+                "--unconstrained",
+                "--seed",
+                "3",
+            ],
+        )
+        pricey = cli.invoke(
+            main,
+            [
+                "backtest",
+                "--symbol",
+                "SYNTH",
+                "--interval",
+                "1h",
+                "--strategy",
+                "random",
+                "--unconstrained",
+                "--seed",
+                "3",
+                "--fee",
+                "0.005",
+            ],
+        )
+
+        assert base.exit_code == pricey.exit_code == 0
+        # Default is 2 x (10bp fee + 1bp edge) = 22bp; a 0.5% fee makes it 102bp.
+        assert "22.0bp round trip" in base.output
+        assert "102.0bp round trip" in pricey.output
+
+    def test_unconstrained_flag_warns_loudly(self, cli, stored):
+        result = cli.invoke(
+            main, ["backtest", "--symbol", "SYNTH", "--interval", "4h", "--unconstrained"]
+        )
+        assert "measures the engine, not a strategy you could run" in result.output
+
+    def test_default_limits_cap_the_position(self, cli, stored):
+        result = cli.invoke(main, ["backtest", "--symbol", "SYNTH", "--interval", "4h"])
+        assert "capped at 0.25" in result.output
+
+    def test_liquidate_flag_completes_the_trade(self, cli, stored):
+        held = cli.invoke(main, ["backtest", "--symbol", "SYNTH", "--interval", "4h"])
+        closed = cli.invoke(
+            main, ["backtest", "--symbol", "SYNTH", "--interval", "4h", "--liquidate"]
+        )
+
+        assert "trades       0 " in held.output
+        assert "trades       1 " in closed.output
+
+    def test_warns_when_the_data_has_quality_errors(self, cli, tmp_path):
+        gappy = pd.concat(
+            [bars_frame("2024-01-01 00:00", 500), bars_frame("2024-01-02 00:00", 500)],
+            ignore_index=True,
+        )
+        write_bars(gappy, "GAPPY", root=tmp_path / "bars")
+
+        result = cli.invoke(main, ["backtest", "--symbol", "GAPPY", "--interval", "1h"])
+
+        assert "data quality errors" in result.output
+        assert "data you have not vouched for" in result.output
+
+    def test_missing_symbol_gives_a_useful_error(self, cli):
+        result = cli.invoke(main, ["backtest", "--symbol", "NOPE"])
+        assert result.exit_code != 0
+        assert "Run 'aifin fetch' first" in result.output
+
+    def test_rejects_an_unknown_strategy(self, cli, stored):
+        result = cli.invoke(main, ["backtest", "--symbol", "SYNTH", "--strategy", "magic"])
+        assert result.exit_code != 0
+        assert "magic" in result.output

@@ -118,6 +118,34 @@ isn't running most of the time.
 Same strategy, same research pipeline, same expected returns — roughly a third
 of the code, and the third that's removed is the dangerous third.
 
+### 1.6 The same argument, measured
+
+Once the backtest engine existed (Phase 1) the claim above stopped being
+arithmetic and became something testable. Below: **one** no-edge strategy,
+**one** price series, one year, a 25% position cap, default costs. The only
+thing that changes between rows is how often it is allowed to trade.
+
+| Cadence | Fills | Turnover | Cost drag | Return | Final equity from $5,000 |
+|---|---:|---:|---:|---:|---:|
+| 1 minute | 393,444 | 909× | 100.0% | −100.00% | **$0.00** |
+| 15 minutes | 26,217 | 925× | 101.7% | −99.06% | $46.89 |
+| 1 hour | 6,459 | 652× | 71.7% | −67.19% | $1,640.72 |
+| 4 hours | 1,643 | 234× | 25.8% | −23.29% | $3,835.50 |
+| 1 day | 279 | 44× | 4.8% | −6.51% | $4,674.73 |
+
+The 1-minute account is annihilated inside a year. Not because the strategy is
+bad — it is the *same* strategy in every row — but because it paid the fee 393,444
+times.
+
+Two caveats, stated plainly. This runs on synthetic bars, so the exact return
+column is specific to that price path; and a real strategy would trade on a
+signal rather than every bar. What does *not* depend on either is the cost drag,
+which follows only from the trade count and the fee schedule. That column is the
+finding, and it is why this project decides on a 4-hour-to-daily horizon.
+
+Reproduce it with `aifin backtest --interval 1m --strategy random` against your
+own data.
+
 ---
 
 ## 2. Operating principle: mock money by default
@@ -221,6 +249,24 @@ is fiction.
 **Gate:** feed the engine a buy-and-hold strategy and a random strategy. Buy-
 and-hold reproduces BTC's actual return within a few bps. Random loses roughly
 its fee bill and nothing more. If either is off, the engine is broken.
+
+> **Status: done.** Implemented in `ai_finance/backtest/`, `strategy/`, `risk/`
+> and `execution/`; 237 tests passing. The gate is asserted as exact identities
+> rather than tolerances, because a loose bound would hide precisely the bug it
+> is meant to catch:
+>
+> - Zero-cost buy-and-hold reproduces the price return to `rel=1e-12`.
+> - With costs, the final equity differs by exactly
+>   `(1 + edge) × (1 + fee)` — the discrepancy is fully explained, not merely
+>   small.
+> - Every fill's cost equals the cost model's prediction to `rel=1e-12`.
+> - Trading a pinned price with zero costs leaves equity untouched to `1e-12`,
+>   and with costs on, loses *exactly* the cost bill. Any accounting leak shows
+>   up here.
+> - A strategy that buys after a green bar on an alternating 100/110 series
+>   loses exactly `(100/110)²`, because it can only ever buy the next open. One
+>   bar of foresight would have turned that into a profit, so this is the
+>   look-ahead detector.
 
 ### Phase 2 — Baselines and the validation framework (weeks 4–6)
 
