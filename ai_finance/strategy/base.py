@@ -97,11 +97,22 @@ class MarketState:
     history: BarWindow
     equity: float
     position_weight: float
+    bar_seconds: float
 
     @property
     def timestamp(self) -> pd.Timestamp:
         """When this information became available: the current bar's close time."""
         return self.bar.close_time
+
+    @property
+    def periods_per_year(self) -> float:
+        """Bars per year at this cadence, for annualising volatility.
+
+        365 days, because crypto does not close. Supplied by the engine so a
+        strategy never has to be told its own cadence out of band — the same
+        code then works on 4-hour and daily bars without a constructor change.
+        """
+        return 365.0 * 24.0 * 3600.0 / self.bar_seconds
 
 
 @dataclass(frozen=True)

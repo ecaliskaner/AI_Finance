@@ -74,8 +74,7 @@ class BacktestResult:
 
     @property
     def daily_returns(self) -> pd.Series:
-        daily = self.equity_curve.resample("1D").last().dropna()
-        return daily.pct_change().dropna()
+        return _daily_returns(self.equity_curve)
 
     #: Daily return standard deviations below this are treated as zero.
     #:
@@ -91,19 +90,40 @@ class BacktestResult:
 
         ``nan`` when the curve has no meaningful variance to divide by.
         """
-        returns = self.daily_returns
-        if len(returns) < 2:
-            return float("nan")
-        std = returns.std(ddof=1)
-        if not np.isfinite(std) or std < self.MIN_MEANINGFUL_VOLATILITY:
-            return float("nan")
-        return float(returns.mean() / std * np.sqrt(DAYS_PER_YEAR))
+        return _sharpe_of(self.equity_curve, self.MIN_MEANINGFUL_VOLATILITY)
+
+    @property
+    def benchmark_sharpe(self) -> float:
+        """The benchmark's own Sharpe, on the same days.
+
+        Without this there is no risk-adjusted comparison, only a return
+        comparison — and a strategy can "beat" a benchmark that fell 86% while
+        still losing 30% of the account. Both numbers are needed to say anything
+        useful.
+        """
+        return _sharpe_of(self.benchmark_curve, self.MIN_MEANINGFUL_VOLATILITY)
+
+    @property
+    def benchmark_max_drawdown(self) -> float:
+        return _max_drawdown_of(self.benchmark_curve)
+
+    @property
+    def beat_benchmark_risk_adjusted(self) -> bool:
+        """Higher Sharpe than buy-and-hold. The Phase 2 gate's actual question.
+
+        A strategy that merely loses less than a falling market has not found an
+        edge; it has found cash. Risk-adjusted comparison is what separates the
+        two.
+        """
+        mine, theirs = self.sharpe, self.benchmark_sharpe
+        if not (np.isfinite(mine) and np.isfinite(theirs)):
+            return False
+        return mine > theirs
 
     @property
     def max_drawdown(self) -> float:
         """Largest peak-to-trough fall, as a negative fraction."""
-        curve = self.equity_curve
-        return float((curve / curve.cummax() - 1.0).min())
+        return _max_drawdown_of(self.equity_curve)
 
     # ---------------- benchmark ----------------
 
@@ -236,8 +256,11 @@ class BacktestResult:
             f"<- {self.benchmark_verdict} the benchmark",
             "",
             f"annualized   {_pct(self.annualized_return)}",
-            f"sharpe       {_num(self.sharpe)}   (from daily returns)",
-            f"max dd       {self.max_drawdown * 100:.2f}%",
+            f"sharpe       {_num(self.sharpe)}   vs benchmark {_num(self.benchmark_sharpe)}"
+            f"   <- {'BEAT' if self.beat_benchmark_risk_adjusted else 'did NOT beat'}"
+            f" risk-adjusted",
+            f"max dd       {self.max_drawdown * 100:.2f}%"
+            f"   vs benchmark {self.benchmark_max_drawdown * 100:.2f}%",
             f"exposure     {self.exposure * 100:.1f}% of bars in a position",
             "",
             f"trades       {self.n_trades:,}  ({self.n_fills:,} fills)",
@@ -263,6 +286,25 @@ class BacktestResult:
             lines += [f"  - {r}" for r in _first_distinct(self.rejected_orders, 3)]
 
         return "\n".join(lines)
+
+
+def _daily_returns(curve: pd.Series) -> pd.Series:
+    daily = curve.resample("1D").last().dropna()
+    return daily.pct_change().dropna()
+
+
+def _sharpe_of(curve: pd.Series, min_volatility: float) -> float:
+    returns = _daily_returns(curve)
+    if len(returns) < 2:
+        return float("nan")
+    std = returns.std(ddof=1)
+    if not np.isfinite(std) or std < min_volatility:
+        return float("nan")
+    return float(returns.mean() / std * np.sqrt(DAYS_PER_YEAR))
+
+
+def _max_drawdown_of(curve: pd.Series) -> float:
+    return float((curve / curve.cummax() - 1.0).min())
 
 
 def _pct(value: float) -> str:

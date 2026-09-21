@@ -287,6 +287,36 @@ out-of-sample, after costs — or you have documented that none do. Both outcome
 are informative and both allow proceeding. What is not allowed is proceeding
 without knowing.
 
+> **Status: tooling done, verdict pending real data.** Implemented in
+> `ai_finance/research/` and `strategy/baselines.py`; 348 tests passing.
+>
+> A baseline passes only by clearing three hurdles: a **positive** Sharpe
+> (losing less than a falling market is cash, not an edge), a higher Sharpe than
+> buy-and-hold on the same days, and a Sharpe above the noise floor implied by
+> how many parameter sets were tried.
+>
+> Run against the synthetic series — which is a zero-drift random walk, so
+> nothing *should* work — all four baselines fail, which is the correct answer
+> and the best available check that the tooling is not manufacturing edges:
+>
+> ```
+>   [fail] breakout             sharpe -0.82 vs -0.64   return -22.2%   churn 42%
+>   [fail] ma-crossover         sharpe -0.65 vs -0.64   return -22.7%   churn 45%
+>   [fail] rsi-mean-reversion   sharpe -0.59 vs -0.64   return  -9.4%   churn 34%
+>   [fail] vol-scaled-trend     sharpe -1.41 vs -0.64   return -42.1%   churn 58%
+>   Noise floor: 975 parameter runs over 1,625 days -> Sharpe 1.54 from luck alone.
+> ```
+>
+> Note the churn column: the winning parameters changed in 34–58% of windows.
+> A rule whose best setting moves that much between quarters is fitting noise,
+> and would be worth distrusting even if it had scored well.
+>
+> **The gate is not closed.** This says the machinery is sound; it says nothing
+> about real markets. Closing it needs a Binance backfill, which cannot run from
+> this sandbox (see the README). Run `aifin walkforward --symbol BTCUSDT` once
+> you have the data — and expect these rules to fail there too, which is the
+> base rate and the reason Phase 3 exists.
+
 ### Phase 3 — Features and supervised models (weeks 6–10)
 
 Now ML, in its most tractable form.
@@ -400,6 +430,22 @@ appears to.
 4. **Log every experiment.** Strategy, parameters, date range, result. The count
    of experiments determines how impressive a result needs to be to mean
    anything.
+
+   Implemented in `ai_finance/research/registry.py`, which turns the count into
+   a number. Given `N` parameter runs over `T` days, the *best* of `N` strategies
+   with no edge at all would be expected to show this Sharpe from luck alone:
+
+   | Parameter runs | Expected best Sharpe (1,000 days) |
+   |---:|---:|
+   | 1 | 0.00 |
+   | 20 | 1.15 |
+   | 100 | 1.53 |
+   | 200 | 1.67 |
+   | 1,000 | 1.97 |
+
+   So a Sharpe of 1.5 after 5 trials is interesting; the same 1.5 after 500 is
+   the null hypothesis behaving exactly as expected. `aifin walkforward` prints
+   this floor and refuses to pass anything below it.
 5. **Test regime robustness.** Separate results for 2021 bull, 2022 bear, and
    2023–24 chop. A strategy that only works in one regime is a bet on that
    regime returning, and should be described that way.

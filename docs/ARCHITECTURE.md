@@ -65,6 +65,7 @@ ai_finance/
 │   └── pipeline.py       # feature assembly, caching, point-in-time correctness
 ├── strategy/
 │   ├── base.py           # Strategy interface: on_bar(state) -> Signal
+│   ├── indicators.py     # SMA, RSI, Donchian, realised vol — scalar per bar
 │   ├── baselines.py      # MA cross, RSI, breakout — the things to beat
 │   └── ml.py             # model prediction → Signal, via explicit policy layer
 ├── risk/
@@ -89,11 +90,11 @@ ai_finance/
     └── monitor.py        # health checks, daily P&L summary
 ```
 
-Built so far (Phases 0–1): all of `data/`, `strategy/base.py`,
-`strategy/baselines.py`, `risk/engine.py`, `execution/base.py`,
-`execution/backtest.py`, and all of `backtest/`. Still to come: `features/`,
-`strategy/ml.py`, `risk/sizing.py`, `execution/paper.py`, `execution/live.py`,
-`research/`, `ops/`.
+Built so far (Phases 0–2): all of `data/`, `strategy/` except `ml.py` (plus
+`strategy/indicators.py`, not in the sketch above), `risk/engine.py`,
+`execution/base.py`, `execution/backtest.py`, all of `backtest/`, and all of
+`research/`. Still to come: `features/`, `strategy/ml.py`, `risk/sizing.py`,
+`execution/paper.py`, `execution/live.py`, `ops/`.
 
 ## Tech stack
 

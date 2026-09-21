@@ -21,8 +21,15 @@ from ai_finance.data.fetch import fetch_history
 from ai_finance.data.quality import check_bars
 from ai_finance.data.sources import BinanceSource, SyntheticSource
 from ai_finance.data.store import load_bars, store_summary
+from ai_finance.research.registry import Registry, expected_max_sharpe
+from ai_finance.research.walkforward import SELECTION_METRICS, run_walk_forward
 from ai_finance.risk.engine import RiskLimits
-from ai_finance.strategy.baselines import AlwaysFlat, BuyAndHold, RandomStrategy
+from ai_finance.strategy.baselines import (
+    STRATEGY_FACTORIES,
+    AlwaysFlat,
+    BuyAndHold,
+    RandomStrategy,
+)
 
 SOURCES = ("binance", "synthetic")
 
@@ -177,6 +184,184 @@ def show(symbol: str, interval: str, start: str | None, end: str | None, tail: i
         return
     click.echo(f"{symbol} {interval}: {len(bars):,} bars")
     click.echo(bars.tail(tail).to_string(index=False))
+
+
+@main.command()
+@click.option("--symbol", default="BTCUSDT", show_default=True)
+@click.option(
+    "--strategy",
+    "strategy_names",
+    multiple=True,
+    default=("all",),
+    help="Repeatable, or 'all' for every baseline.",
+)
+@click.option("--interval", default="4h", type=click.Choice(sorted(INTERVAL_MS)), show_default=True)
+@click.option("--start", default=None, help="UTC.")
+@click.option("--end", default=None, help="UTC.")
+@click.option("--train-bars", default=1000, show_default=True, help="Bars per training window.")
+@click.option("--test-bars", default=250, show_default=True, help="Bars per test window.")
+@click.option(
+    "--embargo-bars",
+    default=10,
+    show_default=True,
+    help="Gap between training and testing, to stop the two sharing information.",
+)
+@click.option("--anchored", is_flag=True, help="Expand the training window instead of rolling it.")
+@click.option(
+    "--select-by",
+    default="sharpe",
+    type=click.Choice(SELECTION_METRICS),
+    show_default=True,
+    help="Metric used to pick parameters on each training window.",
+)
+@click.option("--initial-equity", default=10_000.0, show_default=True)
+@click.option("--fee", default=0.001, show_default=True, help="Exchange fee per side.")
+@click.option("--max-position", default=0.25, show_default=True, help="Risk cap on one position.")
+@click.option("--registry/--no-registry", default=True, show_default=True)
+def walkforward(
+    symbol: str,
+    strategy_names: tuple[str, ...],
+    interval: str,
+    start: str | None,
+    end: str | None,
+    train_bars: int,
+    test_bars: int,
+    embargo_bars: int,
+    anchored: bool,
+    select_by: str,
+    initial_equity: float,
+    fee: float,
+    max_position: float,
+    registry: bool,
+) -> None:
+    """Fit parameters on the past, measure on the future, roll forward.
+
+    Only out-of-sample results are printed. Training performance is a selection
+    artefact, not a finding, so it is deliberately not summarised anywhere.
+    """
+    names = sorted(STRATEGY_FACTORIES) if "all" in strategy_names else list(strategy_names)
+    unknown = [n for n in names if n not in STRATEGY_FACTORIES]
+    if unknown:
+        raise click.ClickException(
+            f"unknown strategy {unknown}; expected from {sorted(STRATEGY_FACTORIES)}"
+        )
+
+    bars = load_bars(symbol, start, end, interval)
+    if bars.empty:
+        raise click.ClickException(f"no {interval} bars for {symbol}. Run 'aifin fetch' first.")
+
+    quality = check_bars(bars, symbol, interval)
+    if not quality.is_clean():
+        click.secho("warning: data has quality errors; see 'aifin quality'.", fg="yellow", err=True)
+
+    log_book = Registry() if registry else None
+    costs = CostModel(fee_rate=fee)
+    limits = RiskLimits(max_position_weight=max_position)
+
+    results = []
+    for name in names:
+        try:
+            result = run_walk_forward(
+                bars,
+                name,
+                train_bars=train_bars,
+                test_bars=test_bars,
+                embargo_bars=embargo_bars,
+                anchored=anchored,
+                symbol=symbol,
+                interval=interval,
+                initial_equity=initial_equity,
+                costs=costs,
+                limits=limits,
+                selection_metric=select_by,
+                registry=log_book,
+            )
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        results.append(result)
+        click.echo(result.to_text())
+        click.echo("")
+
+    _print_verdict(results, log_book)
+
+
+def _print_verdict(results, log_book: Registry | None) -> None:
+    """The Phase 2 gate: did anything beat buy-and-hold risk-adjusted, after costs?
+
+    Three hurdles, all of which a real edge must clear:
+
+    1. A **positive** Sharpe. Losing less than a falling market is not an edge,
+       it is cash, and cash is free.
+    2. Better than buy-and-hold on the same days.
+    3. Above the noise floor implied by how many parameter sets were tried. This
+       is the hurdle that makes the experiment registry worth keeping: with
+       enough attempts, something always looks good.
+    """
+    trials = sum(r.variants_tested for r in results) if results else 0
+    observations = max((len(r.oos.daily_returns) for r in results), default=0)
+    floor = expected_max_sharpe(trials, observations) if observations >= 2 and trials else 0.0
+
+    click.echo("=" * 62)
+    click.echo("VERDICT")
+    click.echo("=" * 62)
+
+    passed = []
+    for result in results:
+        verdict, reason = _judge(result.oos, floor)
+        if verdict == "PASS":
+            passed.append(result)
+        oos = result.oos
+        click.echo(
+            f"  [{verdict}] {result.strategy_name:<20} "
+            f"sharpe {_fmt(oos.sharpe):>7} vs {_fmt(oos.benchmark_sharpe):>7}   "
+            f"return {oos.total_return * 100:+7.1f}%   churn {result.param_turnover * 100:3.0f}%"
+        )
+        if reason:
+            click.echo(f"         {reason}")
+
+    click.echo("")
+    if floor:
+        click.echo(
+            f"Noise floor: {trials:,} parameter runs over {observations:,} days. The best of "
+            f"that\nmany worthless strategies would show a Sharpe of {floor:.2f} by luck alone, "
+            f"so\nthat is the bar, not zero."
+        )
+        click.echo("")
+
+    if passed:
+        click.secho(
+            f"{len(passed)} baseline(s) cleared all three hurdles out of sample.",
+            fg="green",
+        )
+        click.echo("Worth investigating further — and worth re-running on a different period.")
+    else:
+        click.secho("No baseline found an edge on this data.", fg="yellow")
+        click.echo(
+            "That is a documented result, not a failure. It says these classic rules\n"
+            "carry no edge here after costs, which is worth knowing before spending\n"
+            "a month on machine learning."
+        )
+
+    if log_book is not None:
+        click.echo("")
+        click.echo(f"Recorded to {log_book.path}")
+
+
+def _judge(oos, floor: float) -> tuple[str, str]:
+    """Grade one out-of-sample result. Returns ``(verdict, reason_if_failed)``."""
+    if oos.sharpe != oos.sharpe:  # nan
+        return "fail", "no Sharpe: too few days, or the curve never moved"
+    if oos.sharpe <= 0:
+        return "fail", "negative Sharpe — it lost money risk-adjusted, benchmark aside"
+    if oos.benchmark_sharpe == oos.benchmark_sharpe and oos.sharpe <= oos.benchmark_sharpe:
+        return "fail", "did not beat buy-and-hold on the same days"
+    if oos.sharpe <= floor:
+        return "fail", f"below the {floor:.2f} noise floor for this many parameter runs"
+    return "PASS", ""
+
+
+def _fmt(value: float) -> str:
+    return "n/a" if value != value else f"{value:.2f}"
 
 
 @main.command()

@@ -3,8 +3,8 @@
 An automated crypto trading system, built to be evaluated honestly before it is
 ever trusted with real money.
 
-**Current status: Phase 1 complete — data pipeline and backtest engine built
-and verified. No capital at risk.**
+**Current status: Phase 2 complete — data pipeline, backtest engine, baselines
+and walk-forward validation built and verified. No capital at risk.**
 
 The system trades mock money by default. Real capital requires an explicit flag
 and credentials that don't exist yet.
@@ -37,6 +37,10 @@ aifin backtest --symbol SYNTH --interval 4h --strategy buy-and-hold
 # The project's central claim, one command each.
 aifin backtest --symbol SYNTH --interval 1m --strategy random
 aifin backtest --symbol SYNTH --interval 1d --strategy random
+
+# Walk-forward every baseline: fit on the past, measure on the future.
+# Prints out-of-sample results only, plus the multiple-testing noise floor.
+aifin walkforward --symbol SYNTH --interval 4h
 
 pytest && ruff check .
 ```
@@ -92,14 +96,24 @@ scheduled job a few times a day rather than a 24/7 service.
 | Phase | Status |
 |---|---|
 | 0 — Foundations and data | **Done.** Gate verified: 2,628,001 bars over 5 years, 100% coverage, zero quality errors, reproducible and idempotent. |
-| 1 — Backtest engine with honest costs | **Done.** 237 tests. Gate verified as exact identities, not tolerances: zero-cost buy-and-hold reproduces the price return to `1e-12`, and every cost is explained to the same precision. |
-| 2 — Baselines and validation framework | Next |
-| 3 — Features and supervised models | |
+| 1 — Backtest engine with honest costs | **Done.** Gate verified as exact identities, not tolerances: zero-cost buy-and-hold reproduces the price return to `1e-12`, and every cost is explained to the same precision. |
+| 2 — Baselines and validation framework | **Done.** 348 tests. Four classic baselines, walk-forward validation with embargo, and an experiment registry that computes the noise floor. All four baselines correctly find nothing on a zero-drift random walk. |
+| 3 — Features and supervised models | Next |
 | 4 — Live paper trading | |
 | 5 — Small real capital | |
 
+## Two things this repo will not let you fool yourself about
+
+**Trading frequency.** See the table above, and §1.6 of the plan for the same
+claim measured rather than argued.
+
+**How many times you rolled the dice.** Every backtest is logged. With 200
+parameter runs over 1,000 days, the *best* of 200 worthless strategies would be
+expected to show a Sharpe of 1.67 by luck alone — so that, not zero, is the bar
+`aifin walkforward` holds results to.
+
 ## Start here
 
-Read [`docs/PLAN.md`](docs/PLAN.md), then §1.6 for the fee-drag table measured
-with the engine in this repo. Phase 2 is next: the classic baselines a strategy
-has to beat, and the walk-forward validation to judge them honestly.
+Read [`docs/PLAN.md`](docs/PLAN.md), then §1.6 for the fee-drag table. Phase 3
+is next: features and supervised models, framed as prediction plus an explicit
+cost-aware position rule rather than an end-to-end agent.

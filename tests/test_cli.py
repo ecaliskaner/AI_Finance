@@ -309,3 +309,211 @@ class TestBacktestCommand:
         result = cli.invoke(main, ["backtest", "--symbol", "SYNTH", "--strategy", "magic"])
         assert result.exit_code != 0
         assert "magic" in result.output
+
+
+class TestWalkForwardCommand:
+    @pytest.fixture
+    def stored_4h(self, cli, tmp_path):
+        """Enough 1-minute history that 4h bars cover a useful span."""
+        cli.invoke(
+            main,
+            [
+                "fetch",
+                "--source",
+                "synthetic",
+                "--symbol",
+                "SYNTH",
+                "--start",
+                "2024-01-01",
+                "--end",
+                "2024-08-31 23:59",
+            ],
+        )
+        return tmp_path
+
+    def test_runs_and_prints_a_verdict(self, cli, stored_4h):
+        result = cli.invoke(
+            main,
+            [
+                "walkforward",
+                "--symbol",
+                "SYNTH",
+                "--interval",
+                "4h",
+                "--strategy",
+                "ma-crossover",
+                "--train-bars",
+                "300",
+                "--test-bars",
+                "100",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "OUT OF SAMPLE" in result.output
+        assert "VERDICT" in result.output
+        assert "Noise floor" in result.output
+
+    def test_reports_param_churn(self, cli, stored_4h):
+        result = cli.invoke(
+            main,
+            [
+                "walkforward",
+                "--symbol",
+                "SYNTH",
+                "--interval",
+                "4h",
+                "--strategy",
+                "ma-crossover",
+                "--train-bars",
+                "300",
+                "--test-bars",
+                "100",
+            ],
+        )
+        assert "param churn" in result.output
+        assert "churn" in result.output
+
+    def test_all_runs_every_baseline(self, cli, stored_4h):
+        result = cli.invoke(
+            main,
+            [
+                "walkforward",
+                "--symbol",
+                "SYNTH",
+                "--interval",
+                "4h",
+                "--train-bars",
+                "300",
+                "--test-bars",
+                "150",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        for name in ("ma-crossover", "rsi-mean-reversion", "breakout", "vol-scaled-trend"):
+            assert name in result.output
+
+    def test_writes_to_the_registry(self, cli, stored_4h, tmp_path):
+        cli.invoke(
+            main,
+            [
+                "walkforward",
+                "--symbol",
+                "SYNTH",
+                "--interval",
+                "4h",
+                "--strategy",
+                "breakout",
+                "--train-bars",
+                "300",
+                "--test-bars",
+                "150",
+            ],
+        )
+        assert (tmp_path / "experiments.jsonl").exists()
+
+    def test_no_registry_flag_writes_nothing(self, cli, stored_4h, tmp_path):
+        cli.invoke(
+            main,
+            [
+                "walkforward",
+                "--symbol",
+                "SYNTH",
+                "--interval",
+                "4h",
+                "--strategy",
+                "breakout",
+                "--train-bars",
+                "300",
+                "--test-bars",
+                "150",
+                "--no-registry",
+            ],
+        )
+        assert not (tmp_path / "experiments.jsonl").exists()
+
+    def test_unknown_strategy_is_rejected(self, cli, stored_4h):
+        result = cli.invoke(main, ["walkforward", "--symbol", "SYNTH", "--strategy", "magic"])
+        assert result.exit_code != 0
+        assert "unknown strategy" in result.output
+
+    def test_missing_data_gives_a_useful_error(self, cli):
+        result = cli.invoke(main, ["walkforward", "--symbol", "NOPE"])
+        assert result.exit_code != 0
+        assert "Run 'aifin fetch' first" in result.output
+
+    def test_too_little_data_is_explained(self, cli, stored_4h):
+        result = cli.invoke(
+            main,
+            [
+                "walkforward",
+                "--symbol",
+                "SYNTH",
+                "--interval",
+                "1d",
+                "--train-bars",
+                "5000",
+                "--test-bars",
+                "1000",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "too short" in result.output
+
+
+class TestVerdictJudgement:
+    """The gate must not celebrate a losing strategy."""
+
+    def test_a_negative_sharpe_never_passes(self):
+        from ai_finance.cli import _judge
+
+        class Losing:
+            sharpe = -0.5
+            benchmark_sharpe = -0.9
+
+        verdict, reason = _judge(Losing(), floor=0.0)
+        assert verdict == "fail"
+        assert "negative Sharpe" in reason
+
+    def test_beating_a_worse_benchmark_is_not_enough(self):
+        from ai_finance.cli import _judge
+
+        class Mediocre:
+            sharpe = 0.3
+            benchmark_sharpe = 0.1
+
+        verdict, reason = _judge(Mediocre(), floor=1.5)
+        assert verdict == "fail"
+        assert "noise floor" in reason
+
+    def test_losing_to_the_benchmark_fails(self):
+        from ai_finance.cli import _judge
+
+        class Trailing:
+            sharpe = 0.5
+            benchmark_sharpe = 1.2
+
+        verdict, reason = _judge(Trailing(), floor=0.0)
+        assert verdict == "fail"
+        assert "did not beat buy-and-hold" in reason
+
+    def test_undefined_sharpe_fails(self):
+        from ai_finance.cli import _judge
+
+        class Undefined:
+            sharpe = float("nan")
+            benchmark_sharpe = 0.5
+
+        verdict, reason = _judge(Undefined(), floor=0.0)
+        assert verdict == "fail"
+        assert "no Sharpe" in reason
+
+    def test_clearing_all_three_hurdles_passes(self):
+        from ai_finance.cli import _judge
+
+        class Good:
+            sharpe = 2.1
+            benchmark_sharpe = 0.8
+
+        assert _judge(Good(), floor=1.5) == ("PASS", "")

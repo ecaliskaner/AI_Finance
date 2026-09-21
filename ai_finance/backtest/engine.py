@@ -94,6 +94,10 @@ def run_backtest(
     close_time = bars["close_time"].to_numpy()
     n = len(bars)
 
+    # The schema guarantees close_time is the last millisecond of the bar, so
+    # this recovers the cadence exactly without being told it.
+    bar_seconds = (bars["close_time"].iloc[0] - bars["open_time"].iloc[0]).total_seconds() + 0.001
+
     portfolio = Portfolio(cash=initial_equity)
     risk = RiskEngine(limits=limits)
     execution = SimulatedExecution(costs)
@@ -199,6 +203,7 @@ def run_backtest(
             history=BarWindow(arrays, i),
             equity=equity,
             position_weight=portfolio.weight(close_price),
+            bar_seconds=bar_seconds,
         )
 
         # The strategy is consulted even while halted, so its internal state
