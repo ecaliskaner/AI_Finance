@@ -17,6 +17,24 @@ pipeline for finding and validating signals, and a hard risk layer that can
 veto or halt trading. US equities are a possible later extension, not the
 starting point.
 
+## See it work in one command
+
+```bash
+uv venv && uv pip install -e ".[dev]"
+
+aifin demo --report demo.html
+```
+
+Generates a price series, stores it, checks its quality, demonstrates what
+trading frequency costs, walks four baselines forward, fits a model, and writes
+a standalone HTML report — in about 90 seconds, with no exchange account, no API
+key and no network.
+
+It shows that the machinery works. It says **nothing** about whether Bitcoin is
+predictable, because the prices are a random walk generated on the spot: any
+strategy that appeared to work there would be a bug, not a discovery. For a real
+answer, see *Running it on real data* below.
+
 ## Quickstart
 
 ```bash
@@ -47,8 +65,30 @@ aifin walkforward --symbol SYNTH --interval 4h
 # feature turns out to depend on data from the future.
 aifin train --symbol SYNTH --interval 4h --model all
 
+# A standalone HTML report: equity against buy-and-hold, drawdown, cost
+# breakdown. No CDN, no network — it opens anywhere.
+aifin report --symbol SYNTH --interval 4h -o report.html
+
 pytest && ruff check .
 ```
+
+## Running it on real data
+
+Everything above works on generated prices. The actual question — does any of
+this work on Bitcoin — needs a real backfill:
+
+```bash
+aifin fetch --symbol BTCUSDT --symbol ETHUSDT --start 2017-08-17
+aifin quality --symbol BTCUSDT --symbol ETHUSDT
+aifin walkforward --symbol BTCUSDT --interval 4h
+aifin train --symbol BTCUSDT --interval 4h --model all
+aifin report --symbol BTCUSDT --interval 4h -o btc.html
+```
+
+The fetch needs outbound access to `api.binance.com`, so it has to run somewhere
+that allows it — your laptop, or the VPS from Phase 4. Expect the baselines and
+the models to fail there too: that is the base rate, and finding out cheaply is
+the point of the preceding four phases.
 
 Only 1-minute bars are ever stored. Coarser intervals are derived on read, so
 there is one source of truth on disk and no way for two stored intervals to

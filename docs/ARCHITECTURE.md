@@ -84,6 +84,8 @@ ai_finance/
 ├── research/
 │   ├── walkforward.py    # rolling fit/test splits, purge + embargo
 │   └── registry.py       # experiment log — every run recorded
+├── report.py             # standalone HTML: equity, drawdown, costs
+├── demo.py               # guided end-to-end run, no network needed
 └── ops/
     ├── state.py          # run log + last-known positions (cache; exchange is authority)
     ├── alerts.py         # Telegram notifications, kill switch listener

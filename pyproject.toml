@@ -28,6 +28,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["ai_finance"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"ai_finance/assets" = "ai_finance/assets"
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
