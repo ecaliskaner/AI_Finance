@@ -517,3 +517,180 @@ class TestVerdictJudgement:
             benchmark_sharpe = 0.8
 
         assert _judge(Good(), floor=1.5) == ("PASS", "")
+
+
+class TestTrainCommand:
+    @pytest.fixture
+    def stored_year(self, cli, tmp_path):
+        cli.invoke(
+            main,
+            [
+                "fetch",
+                "--source",
+                "synthetic",
+                "--symbol",
+                "SYNTH",
+                "--start",
+                "2023-01-01",
+                "--end",
+                "2023-12-31 23:59",
+            ],
+        )
+        return tmp_path
+
+    def test_runs_and_prints_signal_quality_and_a_verdict(self, cli, stored_year):
+        result = cli.invoke(
+            main,
+            [
+                "train",
+                "--symbol",
+                "SYNTH",
+                "--interval",
+                "4h",
+                "--model",
+                "ridge",
+                "--train-size",
+                "600",
+                "--test-size",
+                "300",
+                "--horizon",
+                "6",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "SIGNAL QUALITY" in result.output
+        assert "accuracy" in result.output
+        assert "info coef" in result.output
+        assert "VERDICT" in result.output
+
+    def test_reports_the_cost_threshold(self, cli, stored_year):
+        result = cli.invoke(
+            main,
+            [
+                "train",
+                "--symbol",
+                "SYNTH",
+                "--interval",
+                "4h",
+                "--train-size",
+                "600",
+                "--test-size",
+                "300",
+            ],
+        )
+        assert "predicted move to act" in result.output
+        assert "round trip" in result.output
+
+    def test_safety_factor_changes_the_threshold(self, cli, stored_year):
+        cheap = cli.invoke(
+            main,
+            [
+                "train",
+                "--symbol",
+                "SYNTH",
+                "--interval",
+                "4h",
+                "--train-size",
+                "600",
+                "--test-size",
+                "300",
+                "--safety-factor",
+                "1.0",
+            ],
+        )
+        strict = cli.invoke(
+            main,
+            [
+                "train",
+                "--symbol",
+                "SYNTH",
+                "--interval",
+                "4h",
+                "--train-size",
+                "600",
+                "--test-size",
+                "300",
+                "--safety-factor",
+                "3.0",
+            ],
+        )
+
+        assert "0.220%" in cheap.output
+        assert "0.660%" in strict.output
+
+    def test_gbm_runs_too(self, cli, stored_year):
+        result = cli.invoke(
+            main,
+            [
+                "train",
+                "--symbol",
+                "SYNTH",
+                "--interval",
+                "4h",
+                "--model",
+                "gbm",
+                "--train-size",
+                "600",
+                "--test-size",
+                "300",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "gbm" in result.output
+
+    def test_a_leak_aborts_with_a_clear_message(self, cli, stored_year, monkeypatch):
+        from ai_finance.features.pipeline import PointInTimeError
+        from ai_finance.research import ml_walkforward
+
+        def leaky(*args, **kwargs):
+            raise PointInTimeError("feature 'tomorrow' saw the future")
+
+        monkeypatch.setattr(ml_walkforward, "assert_point_in_time", leaky)
+
+        result = cli.invoke(
+            main,
+            [
+                "train",
+                "--symbol",
+                "SYNTH",
+                "--interval",
+                "4h",
+                "--train-size",
+                "600",
+                "--test-size",
+                "300",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "LEAK DETECTED" in result.output
+        assert "results discarded" in result.output
+
+    def test_unknown_model_rejected(self, cli, stored_year):
+        result = cli.invoke(main, ["train", "--symbol", "SYNTH", "--model", "transformer"])
+        assert result.exit_code != 0
+        assert "unknown model" in result.output
+
+    def test_missing_data_gives_a_useful_error(self, cli):
+        result = cli.invoke(main, ["train", "--symbol", "NOPE"])
+        assert result.exit_code != 0
+        assert "Run 'aifin fetch' first" in result.output
+
+    def test_too_little_data_is_explained(self, cli, stored_year):
+        result = cli.invoke(
+            main,
+            [
+                "train",
+                "--symbol",
+                "SYNTH",
+                "--interval",
+                "1d",
+                "--train-size",
+                "5000",
+                "--test-size",
+                "1000",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "too short" in result.output or "no usable rows" in result.output

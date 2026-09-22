@@ -329,16 +329,60 @@ Now ML, in its most tractable form.
 - Features: returns over multiple lookbacks, realized volatility, volume
   patterns, order book imbalance, funding rates, time-of-day and day-of-week
   effects, cross-asset (BTC↔ETH) relationships.
+
+  *Built:* 17 features covering multi-horizon returns, realised volatility and
+  its regime ratio, trend, channel position, RSI, volume z-score, bar range, and
+  cyclically-encoded time of day and day of week. *Not built:* order-book
+  imbalance and funding rates, which are not derivable from OHLCV bars and are a
+  data-collection task rather than a feature-engineering one; and cross-asset
+  features, which need the engine to handle more than one symbol at a time.
 - Models in this order: linear/ridge regression → gradient boosting (LightGBM).
   **No deep learning.** On this much data with this signal-to-noise ratio, a
   neural net's main accomplishment is memorizing the training set.
 - Purged, embargoed cross-validation. Standard k-fold leaks information across
   adjacent time periods and will flatter every model you build.
 
+  The subtler leak, and the reason purging exists: a training row at time `t` is
+  labelled with the return from `t` to `t + horizon`. If `t + horizon` falls
+  inside the test window, that row's *label* is partly made of the data the
+  model is about to be scored on. Purging drops those rows; the embargo drops a
+  further margin, because adjacent bars carry much the same information even
+  when their label windows do not literally overlap.
+
 **Gate:** out-of-sample directional accuracy meaningfully above 50%, *and* the
 resulting strategy beats both buy-and-hold and the best Phase 2 baseline after
 costs. If the model wins on accuracy but loses on returns, costs are eating the
 edge — go back and lengthen the horizon.
+
+> **Status: tooling done, verdict pending real data.** Implemented in
+> `ai_finance/features/`, `strategy/ml.py` and `research/`; 451 tests passing.
+>
+> "Meaningfully above 50%" is measured as a z-score, not read off a percentage.
+> 52% on 300 samples is noise and 52% on 30,000 is a finding; only the z-score
+> tells them apart, and the gate requires z > 2.
+>
+> **Two controls, which together are the point.** Given data with a genuine
+> AR(1) mean-reversion signal, the pipeline finds it — 58.5% accuracy, z = 7.8,
+> IC 0.31, and the learned `ret_1` coefficient correctly comes out negative.
+> Given a zero-drift random walk, the same pipeline reports 51.9%, z = 1.7 —
+> below the bar. Without the first control, "found nothing" would be
+> uninterpretable: it could equally mean the machinery cannot find anything.
+>
+> On the synthetic series both models fail the gate, and instructively:
+>
+> ```
+>   [fail] ridge    accuracy 50.66% (z=1.24)   IC 0.02   sharpe -1.29 vs -0.65
+>   [fail] gbm      accuracy 50.06% (z=0.11)   IC 0.00   sharpe -2.78 vs -0.65
+> ```
+>
+> Gradient boosting, the more capable model, lands *closer* to pure chance and
+> loses considerably more — it trades more, so it pays more. Ridge burned 20.7%
+> of starting capital in costs; GBM burned 31.3%. That is the whole thesis
+> arriving from a different direction: a model can predict direction slightly
+> better than chance and still lose, because accuracy counts every bar equally
+> while the exchange charges per trade.
+>
+> **Not closed.** Needs a Binance backfill. Expect these to fail there too.
 
 ### Phase 4 — Live paper trading (weeks 8–14, overlaps Phase 3)
 

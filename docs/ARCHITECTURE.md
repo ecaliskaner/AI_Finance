@@ -90,10 +90,11 @@ ai_finance/
     └── monitor.py        # health checks, daily P&L summary
 ```
 
-Built so far (Phases 0–2): all of `data/`, `strategy/` except `ml.py` (plus
-`strategy/indicators.py`, not in the sketch above), `risk/engine.py`,
-`execution/base.py`, `execution/backtest.py`, all of `backtest/`, and all of
-`research/`. Still to come: `features/`, `strategy/ml.py`, `risk/sizing.py`,
+Built so far (Phases 0–3): all of `data/`, all of `strategy/`, `risk/engine.py`,
+`execution/base.py`, `execution/backtest.py`, all of `backtest/`, all of
+`research/`, and `features/` (as `technical.py` and `pipeline.py` rather than
+the three modules sketched above — order-book and funding features need data
+the store does not hold). Still to come: `risk/sizing.py`,
 `execution/paper.py`, `execution/live.py`, `ops/`.
 
 ## Tech stack
@@ -106,7 +107,7 @@ Built so far (Phases 0–2): all of `data/`, `strategy/` except `ml.py` (plus
 | Data | `pandas` + `pyarrow` | pandas for familiarity; Parquet for compact columnar storage |
 | Storage | Parquet files, partitioned by symbol/month | No database to run; DuckDB can query the files directly if needed |
 | Backtest | **Custom, ~300 lines** | Vectorized libraries (vectorbt, backtrader) make look-ahead bias easy and invisible. Writing the loop yourself is the single best way to actually understand what a backtest claims |
-| ML | `scikit-learn` → `lightgbm` | Linear first for interpretability, then gradient boosting. No deep learning — see PLAN.md Phase 3 |
+| ML | `scikit-learn` only | Ridge first for interpretability, then `HistGradientBoostingRegressor` — the same histogram-based algorithm LightGBM popularised, with one fewer dependency. No deep learning — see PLAN.md Phase 3 |
 | Validation | Custom walk-forward | `sklearn`'s standard CV leaks across time and will flatter every model |
 | Scheduling | `cron` or a systemd timer | A 4-hour-horizon strategy needs no persistent process. Each run is short-lived and stateless, which is far less to get wrong than an always-on async service |
 | Deploy | Docker on a small VPS | Reproducible, restartable, ~$5–10/month |

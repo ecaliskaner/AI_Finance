@@ -3,8 +3,9 @@
 An automated crypto trading system, built to be evaluated honestly before it is
 ever trusted with real money.
 
-**Current status: Phase 2 complete — data pipeline, backtest engine, baselines
-and walk-forward validation built and verified. No capital at risk.**
+**Current status: Phase 3 complete — data pipeline, backtest engine, baselines,
+walk-forward validation and supervised models built and verified. No capital at
+risk.**
 
 The system trades mock money by default. Real capital requires an explicit flag
 and credentials that don't exist yet.
@@ -41,6 +42,10 @@ aifin backtest --symbol SYNTH --interval 1d --strategy random
 # Walk-forward every baseline: fit on the past, measure on the future.
 # Prints out-of-sample results only, plus the multiple-testing noise floor.
 aifin walkforward --symbol SYNTH --interval 4h
+
+# Fit a model on purged history and predict the next window. Aborts if any
+# feature turns out to depend on data from the future.
+aifin train --symbol SYNTH --interval 4h --model all
 
 pytest && ruff check .
 ```
@@ -97,12 +102,12 @@ scheduled job a few times a day rather than a 24/7 service.
 |---|---|
 | 0 — Foundations and data | **Done.** Gate verified: 2,628,001 bars over 5 years, 100% coverage, zero quality errors, reproducible and idempotent. |
 | 1 — Backtest engine with honest costs | **Done.** Gate verified as exact identities, not tolerances: zero-cost buy-and-hold reproduces the price return to `1e-12`, and every cost is explained to the same precision. |
-| 2 — Baselines and validation framework | **Done.** 348 tests. Four classic baselines, walk-forward validation with embargo, and an experiment registry that computes the noise floor. All four baselines correctly find nothing on a zero-drift random walk. |
-| 3 — Features and supervised models | Next |
+| 2 — Baselines and validation framework | **Done.** Four classic baselines, walk-forward validation with embargo, and an experiment registry that computes the noise floor. All four baselines correctly find nothing on a zero-drift random walk. |
+| 3 — Features and supervised models | **Done.** 451 tests. 17 point-in-time-verified features, purged cross-validation, and a policy layer that refuses to trade a predicted move smaller than the round trip. Validated in both directions: finds a planted AR(1) signal (z = 7.8), finds nothing in a random walk (z = 1.7). |
 | 4 — Live paper trading | |
 | 5 — Small real capital | |
 
-## Two things this repo will not let you fool yourself about
+## Three things this repo will not let you fool yourself about
 
 **Trading frequency.** See the table above, and §1.6 of the plan for the same
 claim measured rather than argued.
@@ -111,6 +116,12 @@ claim measured rather than argued.
 parameter runs over 1,000 days, the *best* of 200 worthless strategies would be
 expected to show a Sharpe of 1.67 by luck alone — so that, not zero, is the bar
 `aifin walkforward` holds results to.
+
+**Whether a feature saw the future.** Features are built vectorised over the
+whole history, which is fast and is also the easiest place in a quant codebase
+to leak. So the leak is not argued about, it is tested: the features are
+recomputed on truncated data and any value that moved names itself. `aifin
+train` runs that check before fitting anything and aborts the run if it fails.
 
 ## Start here
 

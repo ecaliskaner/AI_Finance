@@ -21,6 +21,8 @@ from ai_finance.data.fetch import fetch_history
 from ai_finance.data.quality import check_bars
 from ai_finance.data.sources import BinanceSource, SyntheticSource
 from ai_finance.data.store import load_bars, store_summary
+from ai_finance.features.pipeline import PointInTimeError
+from ai_finance.research.ml_walkforward import run_ml_walk_forward
 from ai_finance.research.registry import Registry, expected_max_sharpe
 from ai_finance.research.walkforward import SELECTION_METRICS, run_walk_forward
 from ai_finance.risk.engine import RiskLimits
@@ -30,6 +32,7 @@ from ai_finance.strategy.baselines import (
     BuyAndHold,
     RandomStrategy,
 )
+from ai_finance.strategy.ml import MODEL_KINDS, PredictionPolicy
 
 SOURCES = ("binance", "synthetic")
 
@@ -362,6 +365,173 @@ def _judge(oos, floor: float) -> tuple[str, str]:
 
 def _fmt(value: float) -> str:
     return "n/a" if value != value else f"{value:.2f}"
+
+
+@main.command()
+@click.option("--symbol", default="BTCUSDT", show_default=True)
+@click.option("--interval", default="4h", type=click.Choice(sorted(INTERVAL_MS)), show_default=True)
+@click.option("--start", default=None, help="UTC.")
+@click.option("--end", default=None, help="UTC.")
+@click.option(
+    "--model",
+    "model_kinds",
+    multiple=True,
+    default=("ridge",),
+    help="Repeatable, or 'all'. Start with ridge; it is interpretable.",
+)
+@click.option(
+    "--horizon",
+    default=6,
+    show_default=True,
+    help="Bars ahead to predict. 6 four-hour bars is one day.",
+)
+@click.option("--train-size", default=1500, show_default=True, help="Training rows per fold.")
+@click.option("--test-size", default=500, show_default=True, help="Test rows per fold.")
+@click.option(
+    "--embargo",
+    default=12,
+    show_default=True,
+    help="Rows dropped from training beyond the purge.",
+)
+@click.option("--anchored", is_flag=True, help="Expand the training window instead of rolling it.")
+@click.option("--initial-equity", default=10_000.0, show_default=True)
+@click.option("--fee", default=0.001, show_default=True, help="Exchange fee per side.")
+@click.option(
+    "--safety-factor",
+    default=1.5,
+    show_default=True,
+    help="Predicted edge required, as a multiple of the round-trip cost.",
+)
+@click.option("--max-position", default=0.25, show_default=True)
+@click.option("--registry/--no-registry", default=True, show_default=True)
+@click.option(
+    "--skip-point-in-time-check",
+    is_flag=True,
+    help="Skip the leak check. Do not use for anything you intend to believe.",
+)
+def train(
+    symbol: str,
+    interval: str,
+    start: str | None,
+    end: str | None,
+    model_kinds: tuple[str, ...],
+    horizon: int,
+    train_size: int,
+    test_size: int,
+    embargo: int,
+    anchored: bool,
+    initial_equity: float,
+    fee: float,
+    safety_factor: float,
+    max_position: float,
+    registry: bool,
+    skip_point_in_time_check: bool,
+) -> None:
+    """Fit a model on purged history, predict the next window, roll forward.
+
+    The model predicts a forward return; a separate deterministic policy turns
+    that into a position, and refuses to trade unless the predicted move clears
+    the round-trip cost by a margin.
+    """
+    kinds = list(MODEL_KINDS) if "all" in model_kinds else list(model_kinds)
+    unknown = [k for k in kinds if k not in MODEL_KINDS]
+    if unknown:
+        raise click.ClickException(f"unknown model {unknown}; expected from {list(MODEL_KINDS)}")
+
+    bars = load_bars(symbol, start, end, interval)
+    if bars.empty:
+        raise click.ClickException(f"no {interval} bars for {symbol}. Run 'aifin fetch' first.")
+
+    quality = check_bars(bars, symbol, interval)
+    if not quality.is_clean():
+        click.secho("warning: data has quality errors; see 'aifin quality'.", fg="yellow", err=True)
+
+    log_book = Registry() if registry else None
+    costs = CostModel(fee_rate=fee)
+    policy = PredictionPolicy(costs, safety_factor=safety_factor)
+    limits = RiskLimits(max_position_weight=max_position)
+
+    results = []
+    for kind in kinds:
+        try:
+            result = run_ml_walk_forward(
+                bars,
+                horizon=horizon,
+                model_kind=kind,
+                train_size=train_size,
+                test_size=test_size,
+                embargo=embargo,
+                anchored=anchored,
+                symbol=symbol,
+                interval=interval,
+                initial_equity=initial_equity,
+                costs=costs,
+                limits=limits,
+                policy=policy,
+                registry=log_book,
+                verify_point_in_time=not skip_point_in_time_check,
+            )
+        except PointInTimeError as exc:
+            raise click.ClickException(f"LEAK DETECTED - results discarded.\n{exc}") from exc
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        results.append(result)
+        click.echo(result.to_text())
+        click.echo("")
+
+    _print_model_verdict(results)
+
+
+def _print_model_verdict(results) -> None:
+    """The Phase 3 gate.
+
+    Two hurdles, and the order matters. A model must first show that it predicts
+    direction better than a coin — if it does not, nothing downstream is worth
+    examining. Only then does it have to convert that into money after costs,
+    which is a separate and harder question.
+    """
+    click.echo("=" * 62)
+    click.echo("VERDICT")
+    click.echo("=" * 62)
+
+    passed = []
+    for result in results:
+        oos = result.oos
+        predicts = result.accuracy_z > 2.0
+        earns = oos.beat_benchmark_risk_adjusted and oos.sharpe > 0
+        if predicts and earns:
+            passed.append(result)
+            mark = "PASS"
+        else:
+            mark = "fail"
+
+        click.echo(
+            f"  [{mark}] {result.model_kind:<8} "
+            f"accuracy {result.accuracy * 100:5.2f}% (z={_fmt(result.accuracy_z)})   "
+            f"IC {_fmt(result.ic)}   "
+            f"sharpe {_fmt(oos.sharpe):>6} vs {_fmt(oos.benchmark_sharpe):>6}"
+        )
+        if not predicts:
+            click.echo("         direction is not predicted better than a coin flip")
+        elif not earns:
+            click.echo("         predicts direction, but does not convert it to money after costs")
+
+    click.echo("")
+    if passed:
+        click.secho(f"{len(passed)} model(s) cleared both hurdles.", fg="green")
+        click.echo(
+            "Before believing it: re-run on a different period, confirm the\n"
+            "coefficients make economic sense, and check the IC is not so high\n"
+            "that it implies a leak."
+        )
+    else:
+        click.secho("No model found a tradeable edge on this data.", fg="yellow")
+        click.echo(
+            "The expected outcome, and a real result. Note the cost drag in the\n"
+            "table above: a model can predict direction slightly better than\n"
+            "chance and still lose, because accuracy counts every bar equally\n"
+            "while the exchange charges per trade."
+        )
 
 
 @main.command()
