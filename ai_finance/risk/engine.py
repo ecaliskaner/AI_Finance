@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 from collections import deque
 from dataclasses import dataclass, field, replace
+from datetime import date
 
 import pandas as pd
 
@@ -193,3 +194,38 @@ class RiskEngine:
 
     def record_order(self, timestamp: pd.Timestamp) -> None:
         self._order_times.append(timestamp)
+
+    # ------------------------------------------------------------------ #
+    # persistence
+    # ------------------------------------------------------------------ #
+
+    def snapshot(self) -> dict[str, object]:
+        """Serialisable state, so a halt survives a process restart.
+
+        A drawdown halt that evaporated when the scheduled job next started
+        would be worse than having no halt at all: it would look like a working
+        safety mechanism while quietly resetting itself every few hours.
+        """
+        return {
+            "peak_equity": self.peak_equity,
+            "day_start_equity": self.day_start_equity,
+            "current_day": self.current_day.isoformat() if self.current_day else None,
+            "halted_permanently": self.halted_permanently,
+            "halted_until": self.halted_until.isoformat() if self.halted_until else None,
+            "halt_reason": self.halt_reason,
+            "recent_order_times": [t.isoformat() for t in self._order_times],
+        }
+
+    def restore(self, snapshot: dict[str, object]) -> None:
+        """Load state produced by :meth:`snapshot`."""
+        self.peak_equity = float(snapshot.get("peak_equity") or 0.0)
+        self.day_start_equity = float(snapshot.get("day_start_equity") or 0.0)
+        day = snapshot.get("current_day")
+        self.current_day = date.fromisoformat(str(day)) if day else None
+        self.halted_permanently = bool(snapshot.get("halted_permanently"))
+        until = snapshot.get("halted_until")
+        self.halted_until = pd.Timestamp(str(until)) if until else None
+        self.halt_reason = str(snapshot.get("halt_reason") or "")
+        self._order_times = deque(
+            pd.Timestamp(str(t)) for t in (snapshot.get("recent_order_times") or [])
+        )

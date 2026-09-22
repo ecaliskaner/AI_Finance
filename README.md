@@ -3,9 +3,9 @@
 An automated crypto trading system, built to be evaluated honestly before it is
 ever trusted with real money.
 
-**Current status: Phase 3 complete — data pipeline, backtest engine, baselines,
-walk-forward validation and supervised models built and verified. No capital at
-risk.**
+**Current status: Phase 4 built — the paper trader runs on a timer against live
+prices with simulated money. No capital at risk, and no code path that could
+put any at risk.**
 
 The system trades mock money by default. Real capital requires an explicit flag
 and credentials that don't exist yet.
@@ -72,6 +72,22 @@ aifin report --symbol SYNTH --interval 4h -o report.html
 pytest && ruff check .
 ```
 
+## Paper trading on real prices
+
+Real market data, simulated money, on a timer:
+
+```bash
+aifin run --symbol BTCUSDT --interval 4h --strategy ma-crossover --equity 10000
+aifin status --symbol BTCUSDT
+aifin health --symbol BTCUSDT --interval 4h   # is the job actually running?
+aifin halt --reason "stepping away"           # kill switch; a file, so it always works
+```
+
+`--mode live` raises a `NotImplementedError` rather than trading: `execution/live.py`
+is the last module that will be written, so before Phase 5 there is no code path
+to a real order at all. Scheduling, alerts and the 60-day gate are in
+[`docs/DEPLOY.md`](docs/DEPLOY.md).
+
 ## Running it on real data
 
 Everything above works on generated prices. The actual question — does any of
@@ -119,6 +135,7 @@ disagree.
 | [`docs/PLAN.md`](docs/PLAN.md) | The roadmap, the cost math, and the go/no-go gate between each phase |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System design, module layout, tech stack |
 | [`docs/RISK.md`](docs/RISK.md) | Risk limits, kill switches, key handling, operational safety |
+| [`docs/DEPLOY.md`](docs/DEPLOY.md) | Putting the paper trader on a timer, and what paper mode cannot tell you |
 | [`docs/GLOSSARY.md`](docs/GLOSSARY.md) | Finance and ML terms used throughout, in plain language |
 
 ## The one number that matters most
@@ -143,9 +160,9 @@ scheduled job a few times a day rather than a 24/7 service.
 | 0 — Foundations and data | **Done.** Gate verified: 2,628,001 bars over 5 years, 100% coverage, zero quality errors, reproducible and idempotent. |
 | 1 — Backtest engine with honest costs | **Done.** Gate verified as exact identities, not tolerances: zero-cost buy-and-hold reproduces the price return to `1e-12`, and every cost is explained to the same precision. |
 | 2 — Baselines and validation framework | **Done.** Four classic baselines, walk-forward validation with embargo, and an experiment registry that computes the noise floor. All four baselines correctly find nothing on a zero-drift random walk. |
-| 3 — Features and supervised models | **Done.** 451 tests. 17 point-in-time-verified features, purged cross-validation, and a policy layer that refuses to trade a predicted move smaller than the round trip. Validated in both directions: finds a planted AR(1) signal (z = 7.8), finds nothing in a random walk (z = 1.7). |
-| 4 — Live paper trading | |
-| 5 — Small real capital | |
+| 3 — Features and supervised models | **Done.** 17 point-in-time-verified features, purged cross-validation, and a policy layer that refuses to trade a predicted move smaller than the round trip. Validated in both directions: finds a planted AR(1) signal (z = 7.8), finds nothing in a random walk (z = 1.7). |
+| 4 — Live paper trading | **Built.** 553 tests. Scheduled runner, crash-safe state, kill switch, missed-run detection. `--mode live` raises. The 60-day clock is yours to run — see [`docs/DEPLOY.md`](docs/DEPLOY.md). |
+| 5 — Small real capital | Not started. Needs the Phase 4 gate and every box in [`docs/RISK.md`](docs/RISK.md) §8. |
 
 ## Three things this repo will not let you fool yourself about
 

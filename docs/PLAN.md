@@ -409,6 +409,37 @@ performance within the backtest's confidence interval. Sixty days is short for
 statistical significance but long enough to expose operational failures, which
 are the ones that actually cost money.
 
+> **Status: built and verified; the 60 days are yours to run.** Implemented in
+> `ai_finance/ops/` and `execution/paper.py`; 553 tests passing. Setup is in
+> [`DEPLOY.md`](DEPLOY.md).
+>
+> The properties that make a scheduled trader safe, each one tested:
+>
+> - **Live mode raises.** `--mode live` is not a flag that defaults to off, it
+>   is a `NotImplementedError`. There is no code path to a real order.
+> - **Idempotent per bar.** A bar already acted on is skipped, so an overlapping
+>   schedule, a duplicated cron entry or a retry cannot double-trade.
+> - **A failed sync holds.** If fresh data cannot be fetched the runner reports
+>   it and does nothing, rather than acting on stale prices — an exchange outage
+>   must not be indistinguishable from a quiet market.
+> - **State is crash-safe.** Written to a temporary file and renamed, with the
+>   previous version kept; a truncated file falls back to the backup rather than
+>   reading back as a position you do not hold.
+> - **Halts survive restarts.** A drawdown halt that reset itself when the job
+>   next started would be worse than no halt at all.
+> - **The kill switch is a file.** No network, no credentials, no third-party
+>   API, so it works on the day the ones that need them are down.
+> - **Missed runs are detectable.** `aifin health` exits non-zero when the
+>   newest heartbeat is stale. The silent skipped run is the dangerous failure;
+>   a crash is loud.
+> - **Paper fills equal backtest fills**, by construction — the paper adapter
+>   reuses the backtest's fill logic, so a divergence between the two is
+>   attributable to inputs rather than to two implementations drifting apart.
+>
+> What it cannot do: reconcile against an exchange position, because in paper
+> mode there is none. Local state is the authority here and must not be in
+> Phase 5.
+
 ### Phase 5 — Small real capital (month 4+)
 
 - Start at **$200–500**, not $5,000. The first live deployment is an operational

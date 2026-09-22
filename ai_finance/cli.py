@@ -23,6 +23,16 @@ from ai_finance.data.sources import BinanceSource, SyntheticSource
 from ai_finance.data.store import load_bars, store_summary
 from ai_finance.demo import run_demo
 from ai_finance.features.pipeline import PointInTimeError
+from ai_finance.ops.alerts import (
+    engage_halt,
+    halt_reason,
+    is_halted,
+    notifier_from_environment,
+    release_halt,
+)
+from ai_finance.ops.monitor import check_health
+from ai_finance.ops.runner import run_once
+from ai_finance.ops.state import StateStore, default_state_path
 from ai_finance.report import write_report
 from ai_finance.research.ml_walkforward import run_ml_walk_forward
 from ai_finance.research.registry import Registry, expected_max_sharpe
@@ -138,6 +148,144 @@ def demo(
 
 def _sortable(value: float) -> float:
     return -1e9 if value != value else value
+
+
+@main.command()
+@click.option("--symbol", default="BTCUSDT", show_default=True)
+@click.option("--interval", default="4h", type=click.Choice(sorted(INTERVAL_MS)), show_default=True)
+@click.option(
+    "--strategy",
+    "strategy_name",
+    default="ma-crossover",
+    type=click.Choice(sorted(STRATEGY_FACTORIES)),
+    show_default=True,
+)
+@click.option(
+    "--mode",
+    default="paper",
+    show_default=True,
+    help="Only 'paper' exists. 'live' raises: there is no code path to a real order yet.",
+)
+@click.option("--equity", default=10_000.0, show_default=True, help="Starting paper capital.")
+@click.option("--fee", default=0.001, show_default=True)
+@click.option("--max-position", default=0.25, show_default=True)
+@click.option(
+    "--source",
+    default="binance",
+    type=click.Choice(SOURCES),
+    show_default=True,
+    help="'synthetic' drives the runner from generated prices, to test the plumbing.",
+)
+@click.option("--no-sync", is_flag=True, help="Decide on stored bars without fetching.")
+def run(
+    symbol: str,
+    interval: str,
+    strategy_name: str,
+    mode: str,
+    equity: float,
+    fee: float,
+    max_position: float,
+    source: str,
+    no_sync: bool,
+) -> None:
+    """One wake-up of the scheduled job: sync, decide, act, exit.
+
+    Put this on a timer at the cadence you are trading. Safe to run more often
+    than that: a bar already acted on is skipped, so an overlapping schedule or
+    a retry cannot double-trade.
+    """
+    feed = None
+    if source == "synthetic":
+        feed = SyntheticSource(
+            epoch_ms=int(pd.Timestamp("2024-01-01", tz="UTC").timestamp() * 1000),
+            seed=11,
+            now_ms=lambda: int(pd.Timestamp.now("UTC").timestamp() * 1000),
+        )
+
+    try:
+        outcome = run_once(
+            symbol=symbol,
+            interval=interval,
+            strategy_name=strategy_name,
+            mode=mode,
+            source=feed,
+            costs=CostModel(fee_rate=fee),
+            limits=RiskLimits(max_position_weight=max_position),
+            initial_equity=equity,
+            notifier=notifier_from_environment(),
+            sync=not no_sync,
+        )
+    except NotImplementedError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except (ValueError, RuntimeError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(outcome.to_text())
+
+
+@main.command()
+@click.option("--symbol", default="BTCUSDT", show_default=True)
+@click.option("--mode", default="paper", show_default=True)
+def status(symbol: str, mode: str) -> None:
+    """What the paper account currently holds."""
+    store = StateStore(default_state_path(symbol, mode))
+    state = store.load()
+    if state is None:
+        click.echo(f"No state for {symbol.upper()} ({mode}). Run 'aifin run' first.")
+        return
+
+    click.echo(f"{state.symbol} [{state.mode}] {state.strategy} on {state.interval}")
+    click.echo(f"  started     {state.started_at or 'unknown'}")
+    click.echo(f"  runs        {state.n_runs:,}   fills {state.n_fills:,}")
+    click.echo(f"  cash        {state.cash:,.2f}")
+    click.echo(f"  units       {state.units:.8f}")
+    click.echo(f"  costs paid  {state.total_fees + state.total_concession:,.2f}")
+    click.echo(f"  last bar    {state.last_bar_time or 'never'}")
+    if state.halted_permanently:
+        click.secho(f"  HALTED      {state.halt_reason}", fg="red")
+    elif state.halted_until:
+        click.secho(f"  halted till {state.halted_until}", fg="yellow")
+    if is_halted():
+        click.secho(f"  KILL SWITCH {halt_reason()}", fg="red")
+
+
+@main.command()
+@click.option("--symbol", default="BTCUSDT", show_default=True)
+@click.option("--interval", default="4h", type=click.Choice(sorted(INTERVAL_MS)), show_default=True)
+@click.option("--mode", default="paper", show_default=True)
+def health(symbol: str, interval: str, mode: str) -> None:
+    """Has the scheduled job actually been running?
+
+    Exits non-zero when the newest heartbeat is stale, so a monitoring cron can
+    act on it. The silent missed run is the dangerous failure, not the crash.
+    """
+    report = check_health(symbol, mode, INTERVAL_MS[interval] / 1000.0)
+    click.echo(report.to_text())
+    if report.is_stale:
+        sys.exit(1)
+
+
+@main.command()
+@click.option("--reason", default="manual", show_default=True)
+def halt(reason: str) -> None:
+    """Engage the kill switch: stop opening or holding positions.
+
+    A file on disk, deliberately. It needs no network, no credentials and no
+    third-party API, so it still works on the day the ones that do are down.
+    """
+    path = engage_halt(reason)
+    click.secho(f"Kill switch engaged ({reason}).", fg="red")
+    click.echo(f"  {path}")
+    click.echo("The next run will flatten and refuse to add. 'aifin resume' clears it.")
+
+
+@main.command()
+def resume() -> None:
+    """Release the kill switch."""
+    if release_halt():
+        click.secho("Kill switch released. Trading resumes on the next run.", fg="green")
+    else:
+        click.echo("Kill switch was not engaged.")
 
 
 @main.command()

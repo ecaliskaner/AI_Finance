@@ -694,3 +694,82 @@ class TestTrainCommand:
         )
         assert result.exit_code != 0
         assert "too short" in result.output or "no usable rows" in result.output
+
+
+class TestRunCommands:
+    @pytest.fixture
+    def paper(self, cli):
+        """Options that drive the runner from a synthetic live feed."""
+        return [
+            "run",
+            "--symbol",
+            "PAPER",
+            "--interval",
+            "1h",
+            "--strategy",
+            "ma-crossover",
+            "--source",
+            "synthetic",
+            "--equity",
+            "5000",
+            "--max-position",
+            "1.0",
+        ]
+
+    def test_live_mode_is_refused_at_the_cli(self, cli, paper):
+        result = cli.invoke(main, [*paper, "--mode", "live"])
+
+        assert result.exit_code != 0
+        assert "live trading is not implemented" in result.output
+        assert "--mode paper" in result.output
+
+    def test_a_run_reports_what_it_did(self, cli, paper):
+        result = cli.invoke(main, paper)
+
+        assert result.exit_code == 0, result.output
+        assert "[paper]" in result.output
+        assert "equity" in result.output
+
+    def test_status_before_any_run(self, cli):
+        result = cli.invoke(main, ["status", "--symbol", "PAPER"])
+        assert "Run 'aifin run' first" in result.output
+
+    def test_status_after_a_run(self, cli, paper):
+        cli.invoke(main, paper)
+        result = cli.invoke(main, ["status", "--symbol", "PAPER"])
+
+        assert result.exit_code == 0, result.output
+        assert "ma-crossover" in result.output
+        assert "cash" in result.output
+
+    def test_health_is_stale_before_any_run(self, cli):
+        result = cli.invoke(main, ["health", "--symbol", "PAPER", "--interval", "1h"])
+        assert result.exit_code == 1, "a monitoring cron needs a non-zero exit"
+        assert "NEVER RUN" in result.output
+
+    def test_health_is_ok_after_a_run(self, cli, paper):
+        cli.invoke(main, paper)
+        result = cli.invoke(main, ["health", "--symbol", "PAPER", "--interval", "1h"])
+
+        assert result.exit_code == 0
+        assert "OK" in result.output
+
+    def test_halt_and_resume(self, cli, paper):
+        cli.invoke(main, paper)
+
+        halted = cli.invoke(main, ["halt", "--reason", "testing"])
+        assert "Kill switch engaged" in halted.output
+        assert "KILL SWITCH testing" in cli.invoke(main, ["status", "--symbol", "PAPER"]).output
+
+        resumed = cli.invoke(main, ["resume"])
+        assert "released" in resumed.output
+        assert "KILL SWITCH" not in cli.invoke(main, ["status", "--symbol", "PAPER"]).output
+
+    def test_resume_when_not_halted(self, cli):
+        result = cli.invoke(main, ["resume"])
+        assert "was not engaged" in result.output
+
+    def test_rerunning_does_not_double_trade(self, cli, paper):
+        cli.invoke(main, paper)
+        second = cli.invoke(main, paper)
+        assert "already-done" in second.output

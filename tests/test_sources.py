@@ -195,6 +195,41 @@ class TestSyntheticSource:
         pd.testing.assert_frame_equal(whole, pd.concat([first, second], ignore_index=True))
         pd.testing.assert_frame_equal(first, first_again)
 
+    def test_a_bar_depends_only_on_its_index_not_on_the_request_size(self):
+        """Regression: block-size-dependent draws broke cross-process replay.
+
+        The generator used to grow by doubling and draw each column as one
+        contiguous slice, so the random values landing on a given bar depended
+        on how far the caller had asked for. Two processes paginating
+        differently — exactly what the scheduled runner does across wake-ups —
+        produced different prices for the same timestamp, and the stored series
+        gained a discontinuity wherever the two met.
+        """
+        target = START_MS + 5_000 * MINUTE
+        frames = [
+            SyntheticSource(epoch_ms=START_MS, seed=11).fetch_chunk("S", "1m", target, limit=limit)
+            for limit in (1, 7, 100, 1000)
+        ]
+
+        for frame in frames[1:]:
+            pd.testing.assert_frame_equal(frames[0], frame.head(1))
+
+    def test_resuming_a_fetch_joins_without_a_price_jump(self):
+        """The join between two fetch sessions must not be a discontinuity."""
+        first = SyntheticSource(epoch_ms=START_MS, seed=5).fetch_chunk(
+            "S", "1m", START_MS, limit=2_000
+        )
+        # A second process resumes where the first stopped.
+        resumed = SyntheticSource(epoch_ms=START_MS, seed=5).fetch_chunk(
+            "S", "1m", START_MS + 2_000 * MINUTE, limit=50
+        )
+
+        joined = pd.concat([first, resumed], ignore_index=True)
+        returns = joined["close"].pct_change().dropna().abs()
+        # 1-minute moves at 50% annual vol are ~7bp; 2% would be 30 sigma.
+        assert returns.max() < 0.02
+        assert resumed["open"].iloc[0] == pytest.approx(first["close"].iloc[-1])
+
     def test_different_seeds_give_different_paths(self):
         a = SyntheticSource(epoch_ms=START_MS, seed=1).fetch_chunk("S", "1m", START_MS, limit=200)
         b = SyntheticSource(epoch_ms=START_MS, seed=2).fetch_chunk("S", "1m", START_MS, limit=200)

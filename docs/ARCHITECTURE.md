@@ -87,17 +87,19 @@ ai_finance/
 ├── report.py             # standalone HTML: equity, drawdown, costs
 ├── demo.py               # guided end-to-end run, no network needed
 └── ops/
-    ├── state.py          # run log + last-known positions (cache; exchange is authority)
-    ├── alerts.py         # Telegram notifications, kill switch listener
-    └── monitor.py        # health checks, daily P&L summary
+    ├── runner.py         # the scheduled job: sync, decide, act, persist, exit
+    ├── state.py          # crash-safe position state, atomic writes
+    ├── alerts.py         # Telegram notifications, file-based kill switch
+    └── monitor.py        # heartbeats and missed-run detection
 ```
 
-Built so far (Phases 0–3): all of `data/`, all of `strategy/`, `risk/engine.py`,
-`execution/base.py`, `execution/backtest.py`, all of `backtest/`, all of
-`research/`, and `features/` (as `technical.py` and `pipeline.py` rather than
-the three modules sketched above — order-book and funding features need data
-the store does not hold). Still to come: `risk/sizing.py`,
-`execution/paper.py`, `execution/live.py`, `ops/`.
+Built so far (Phases 0–4): all of `data/`, all of `strategy/`, `risk/engine.py`,
+`execution/base.py`, `execution/backtest.py`, `execution/paper.py`, all of
+`backtest/`, all of `research/`, all of `ops/` (with `runner.py` in place of the
+sketch's `state.py`-only listing), and `features/` (as `technical.py` and
+`pipeline.py` rather than the three modules sketched above — order-book and
+funding features need data the store does not hold). Still to come:
+`risk/sizing.py` and `execution/live.py`, both Phase 5.
 
 ## Tech stack
 
